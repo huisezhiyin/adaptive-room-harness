@@ -38,6 +38,6 @@ The MVP should get the room data model right before building a daemon, web UI, o
 
 ## Design Docs
 
+- [Idea Doc v2](docs/IDEA_DOC_V2.md)
 - [Technical Architecture](docs/TECHNICAL_ARCHITECTURE.md)
 - [Product Direction](docs/PRODUCT_DIRECTION.md)
-
