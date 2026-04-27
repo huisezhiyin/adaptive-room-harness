@@ -1,10 +1,20 @@
 # Adaptive Room Harness
 
-Adaptive Room Harness is a local-first, Codex-oriented room for complex agent work.
+Adaptive Room Harness is a local-first multi-agent discussion room for Codex-style coding workflows.
 
-It lets a main agent keep ownership of the task while waking a small discussion room when the work is complex, risky, or ambiguous. The room records the discussion, writes durable artifacts, and produces a concise `main_agent_reference.json` packet that the main agent can use as advisory input.
+It lets a main agent keep ownership of the task while waking a small peer room when work is complex, risky, or ambiguous. The room records the agent discussion, writes durable artifacts, and produces a concise `main_agent_reference.json` packet that the main agent can use as advisory input.
 
 This is an early public alpha: useful enough to run locally, intentionally small, and still rough around the edges.
+
+## Keywords
+
+Codex CLI, agentic coding, multi-agent collaboration, local-first AI tools, agent room, peer review, advisory planning, developer workflow automation.
+
+## Why This Exists
+
+Most coding-agent work should stay simple: one main agent, one workspace, one clear owner. But harder tasks often benefit from a second pass: independent drafting, review, revision, risk checks, and a durable summary that can be inspected later.
+
+Adaptive Room Harness is the small local harness for that middle ground. It does not try to become a general autonomous multi-agent platform. It gives the main agent a room it can wake when useful, then turns the discussion into artifacts the main agent can actually use.
 
 ## What Works Today
 
@@ -87,6 +97,8 @@ main agent receives task
   -> room writes main_agent_reference.json
   -> main agent reads the reference, decides, implements, verifies
 ```
+
+In other words: the room advises; the main agent owns the work.
 
 ## Core Commands
 
