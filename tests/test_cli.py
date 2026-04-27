@@ -430,6 +430,125 @@ printf "fake claude response\\nNext: continue.\\n"
     assert "--no-session-persistence" in args
 
 
+def test_play_maps_claude_cli_to_deepseek_env_with_fake_claude(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    fake_claude = tmp_path / "claude"
+    env_log = tmp_path / "claude-env.log"
+    fake_claude.write_text(
+        f"""#!/bin/sh
+settings=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--settings" ]; then
+    shift
+    settings="$1"
+  fi
+  shift
+done
+printf "BASE=%s\\n" "$ANTHROPIC_BASE_URL" >> "{env_log}"
+printf "AUTH=%s\\n" "${{ANTHROPIC_AUTH_TOKEN:+set}}" >> "{env_log}"
+printf "API=%s\\n" "${{ANTHROPIC_API_KEY:+set}}" >> "{env_log}"
+printf "MODEL=%s\\n" "$ANTHROPIC_MODEL" >> "{env_log}"
+printf "SONNET=%s\\n" "$ANTHROPIC_DEFAULT_SONNET_MODEL" >> "{env_log}"
+printf "HAIKU=%s\\n" "$ANTHROPIC_DEFAULT_HAIKU_MODEL" >> "{env_log}"
+python3 - "$settings" >> "{env_log}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    env = json.load(f)["env"]
+print("SETTINGS_BASE=" + env["ANTHROPIC_BASE_URL"])
+print("SETTINGS_AUTH=" + ("set" if env["ANTHROPIC_AUTH_TOKEN"] else ""))
+print("SETTINGS_SONNET=" + env["ANTHROPIC_DEFAULT_SONNET_MODEL"])
+PY
+printf "fake claude deepseek env response\\nNext: continue.\\n"
+""",
+    )
+    fake_claude.chmod(0o755)
+    monkeypatch.setenv("ROOM_CLAUDE_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-value-that-must-not-be-written")
+    monkeypatch.setenv("ROOM_ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
+    monkeypatch.setenv("ROOM_ANTHROPIC_MODEL", "deepseek-v4-pro[1m]")
+    monkeypatch.setenv("ROOM_CLAUDE_DEEPSEEK_MODEL", "deepseek-v4-flash")
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Route Claude Code through DeepSeek.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--runtime",
+            "claude-cli",
+            "--claude-bin",
+            str(fake_claude),
+        ],
+    )
+
+    assert result.exit_code == 0
+    env_text = env_log.read_text()
+    assert "BASE=https://api.deepseek.com/anthropic" in env_text
+    assert "AUTH=set" in env_text
+    assert "API=set" in env_text
+    assert "MODEL=deepseek-v4-flash" in env_text
+    assert "SONNET=deepseek-v4-flash" in env_text
+    assert "HAIKU=deepseek-v4-flash" in env_text
+    assert "SETTINGS_BASE=https://api.deepseek.com/anthropic" in env_text
+    assert "SETTINGS_AUTH=set" in env_text
+    assert "SETTINGS_SONNET=deepseek-v4-flash" in env_text
+    transcript = next((workspace / ".room" / "rooms").glob("room_*/transcript.jsonl")).read_text()
+    assert "secret-value-that-must-not-be-written" not in transcript
+
+
+def test_play_does_not_fallback_to_codex_when_requested_runtime_fails(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    fake_claude = tmp_path / "claude"
+    fake_codex = tmp_path / "codex"
+    codex_args_log = tmp_path / "codex-args.log"
+    fake_claude.write_text(
+        """#!/bin/sh
+printf "configured claude runtime failed intentionally\n" >&2
+exit 7
+""",
+    )
+    fake_codex.write_text(
+        f"""#!/bin/sh
+printf "%s\\n" "$*" >> "{codex_args_log}"
+printf "unexpected codex fallback\\n"
+""",
+    )
+    fake_claude.chmod(0o755)
+    fake_codex.chmod(0o755)
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Do not silently swap runtimes.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--runtime",
+            "claude-cli",
+            "--claude-bin",
+            str(fake_claude),
+            "--codex-bin",
+            str(fake_codex),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "claude -p failed" in result.output
+    assert not codex_args_log.exists()
+    rooms = list((workspace / ".room" / "rooms").glob("room_*/transcript.jsonl"))
+    assert not rooms or "unexpected codex fallback" not in rooms[0].read_text()
+
+
 def test_play_supports_mixed_participant_runtimes(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     fake_codex = tmp_path / "codex"
@@ -690,6 +809,7 @@ def test_bundled_stage_profiles_are_available(tmp_path) -> None:
     assert debug_profile.participants[0].can_block is True
     assert debug_profile.participants[1].weight < debug_profile.participants[0].weight
     assert final_profile.participants[0].id == "claude_final_reviewer"
+    assert final_profile.participants[0].runtime == "claude-cli"
     assert final_profile.participants[1].id == "deepseek_release_advisor"
 
 
@@ -866,6 +986,49 @@ def test_observer_http_endpoints_return_rooms_and_artifacts(tmp_path) -> None:
     assert any(item["room_id"] == room_id for item in rooms["rooms"])
     assert room["state"]["room_id"] == room_id
     assert room["artifacts"] == {}
+
+
+def test_observer_room_list_handles_legacy_and_invalid_room_state(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    legacy_result = runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--task", "Legacy observer room"],
+    )
+    valid_result = runner.invoke(
+        app,
+        ["init", "--workspace", str(workspace), "--task", "Valid observer room"],
+    )
+    assert legacy_result.exit_code == 0
+    assert valid_result.exit_code == 0
+    legacy_id = next(part for part in legacy_result.stdout.split() if part.startswith("room_"))
+    valid_id = next(part for part in valid_result.stdout.split() if part.startswith("room_"))
+
+    legacy_state = workspace / ".room" / "rooms" / legacy_id / "state.json"
+    legacy_payload = json.loads(legacy_state.read_text())
+    legacy_payload["collaboration_pattern"] = "mixed_runtime_review"
+    legacy_state.write_text(json.dumps(legacy_payload))
+
+    invalid_dir = workspace / ".room" / "rooms" / "room_invalid"
+    invalid_dir.mkdir(parents=True)
+    invalid_dir.joinpath("state.json").write_text('{"collaboration_pattern": "future_pattern"}')
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(workspace))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        rooms = json.loads(urlopen(f"{base_url}/api/rooms", timeout=5).read())
+        legacy_room = json.loads(urlopen(f"{base_url}/api/rooms/{legacy_id}", timeout=5).read())
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    room_ids = {item["room_id"] for item in rooms["rooms"]}
+    assert legacy_id in room_ids
+    assert valid_id in room_ids
+    assert "room_invalid" not in room_ids
+    assert legacy_room["state"]["collaboration_pattern"] == "mixed_runtime_review"
 
 
 def test_observer_handles_malformed_json_artifact_as_text(tmp_path) -> None:

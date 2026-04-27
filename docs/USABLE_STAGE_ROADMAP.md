@@ -3,7 +3,7 @@
 This document captures the next design step after the runnable CLI MVP.
 
 The design was informed by a real `room codex-ask` wake cycle in room
-`room_20260426_055525`. Two Codex participants discussed the path from a
+`room_20260426_055525`. Two configured participants discussed the path from a
 runnable MVP to a daily-usable local workflow.
 
 ## Current State
@@ -12,7 +12,7 @@ The current MVP can:
 
 - triage a task through `room codex-ask`
 - keep simple tasks in the main Codex session
-- wake two Codex agents for complex tasks
+- wake configured participants for complex tasks
 - write transcript, design, tasks, main-agent reference, execution plan, wake checkpoint, and host decision artifacts
 - return machine-readable JSON for host or Codex-client integration
 
@@ -49,7 +49,7 @@ Rules:
 
 Implementation status: implemented.
 
-When two Codex participants use the same model/capability level, the default room behavior is `draft_review_revise`:
+When two participants use the same model/capability level, the default room behavior is `draft_review_revise`:
 
 ```text
 agent A drafts
@@ -176,7 +176,7 @@ browser polls /api/rooms and /api/rooms/<room_id>
 Acceptance criteria:
 
 - The page shows active/recent rooms.
-- The page shows recent transcript turns from both Codex participants.
+- The page shows recent transcript turns from both participants.
 - The page opens `main_agent_reference.json` by default when present.
 - The service can run during a wake cycle and reveal new completed turns/artifacts via polling.
 
@@ -234,7 +234,7 @@ permissions
 
 Acceptance criteria:
 
-- The default remains two Codex agents.
+- The default remains two configured participants; project profiles choose their runtimes.
 - A project can override participant ids, models, rounds, and wake conditions without code edits.
 - The triage result explains why each configured participant was or was not activated.
 

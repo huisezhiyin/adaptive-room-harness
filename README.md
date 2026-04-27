@@ -4,6 +4,8 @@ Adaptive Room Harness is a local-first multi-agent discussion room for coding-ag
 
 It lets a main agent keep ownership of the task while waking a small peer room when work is complex, risky, or ambiguous. The room records the agent discussion, writes durable artifacts, and produces a concise `main_agent_reference.json` packet that the main agent can use as advisory input.
 
+The room is runtime-neutral: each participant is backed by the configured adapter, such as `codex-cli`, `claude-cli`, or an Anthropic-compatible API. A requested runtime is authoritative for that wake cycle. If it fails, the room surfaces that failure instead of silently substituting another runtime.
+
 This is an early public alpha: useful enough to run locally, intentionally small, and still rough around the edges.
 
 ## Keywords
@@ -16,11 +18,12 @@ Most coding-agent work should stay simple: one main agent, one workspace, one cl
 
 Adaptive Room Harness is the small local harness for that middle ground. It does not try to become a general autonomous multi-agent platform. It gives the main agent a room it can wake when useful, then turns the discussion into artifacts the main agent can actually use.
 
-The current alpha ships with a Codex CLI adapter, but the room contract is intentionally broader: a host can route tasks, wake participants, persist discussion, and consume the reference packet without making Codex the only possible agent runtime.
+The current alpha ships with Codex CLI, Claude Code CLI, and Anthropic-compatible API adapters. Codex-specific commands are convenience wrappers; they are not the room's identity or the only supported runtime.
 
 ## What Works Today
 
-- `room codex-ask` triages a task and wakes two Codex CLI participants when useful.
+- `room play --profile <name>` wakes configured participants across supported runtimes.
+- `room codex-ask` is a Codex-oriented convenience wrapper for local Codex workflows.
 - Same-capability participants use a deep collaboration chain by default: draft, review, revise, final check.
 - Simple tasks stay in the main host or agent session.
 - Complex tasks create a room transcript, design notes, task notes, and `main_agent_reference.json`.
@@ -32,8 +35,8 @@ The main agent remains the writer, decider, and verifier. Other agents provide d
 ## Prerequisites
 
 - Python 3.11+
-- A working Codex CLI install for the current built-in adapter commands that wake live participants, such as `room codex-ask`, `room wake`, and `room play`
-- Codex CLI authentication already configured locally when using that adapter
+- At least one working runtime adapter for live participant calls, such as Codex CLI, Claude Code CLI, or an Anthropic-compatible API key
+- Runtime authentication already configured locally for the adapters you choose
 
 The test suite uses a fake Codex executable, so development checks do not require live Codex calls.
 
@@ -66,7 +69,16 @@ Open:
 http://127.0.0.1:8765
 ```
 
-In another terminal, ask for help on a complex task:
+In another terminal, wake a configured room profile:
+
+```bash
+.venv/bin/room play \
+  --workspace . \
+  --task "Review a risky architecture migration with rollback concerns." \
+  --profile cc-review
+```
+
+Or use the Codex-oriented convenience wrapper:
 
 ```bash
 .venv/bin/room codex-ask \
@@ -74,7 +86,7 @@ In another terminal, ask for help on a complex task:
   --task "Design a risky architecture migration with rollback concerns."
 ```
 
-For a complex task, the room wakes two Codex participants, records their discussion, and writes:
+For a complex task, the room wakes the configured participants, records their discussion, and writes:
 
 ```text
 .room/rooms/<room_id>/
@@ -92,10 +104,10 @@ The normal alpha workflow is:
 
 ```text
 main agent receives task
-  -> room codex-ask
+  -> room play --profile <name>
   -> simple task: continue solo
-  -> complex task: wake two Codex participants
-  -> agent A drafts, agent B reviews, agent A revises, agent B final-checks
+  -> complex task: wake configured participants
+  -> participant A drafts, participant B reviews, participant A revises, participant B final-checks
   -> room writes main_agent_reference.json
   -> main agent reads the reference, decides, implements, verifies
 ```
@@ -178,8 +190,16 @@ room play \
 ```
 
 Claude Code keeps its own authentication outside the repository. To route Claude Code through
-an Anthropic-compatible gateway, configure the relevant Claude Code environment variables before
-running `room`.
+DeepSeek's Anthropic-compatible API, set `ROOM_CLAUDE_PROVIDER=deepseek` in `.env`. The harness
+maps that to the Claude Code variables documented by DeepSeek: `ANTHROPIC_BASE_URL`,
+`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
+`ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, and
+`CLAUDE_CODE_SUBAGENT_MODEL`. The adapter also passes those values through a temporary
+`--settings` file so project-local DeepSeek configuration can override a stale global Claude Code
+gateway without putting the API key on the command line.
+Use `ROOM_CLAUDE_DEEPSEEK_MODEL=deepseek-v4-flash` for the Claude Code path when you want fast,
+cheap advisory turns, while keeping `ROOM_ANTHROPIC_MODEL=deepseek-v4-pro[1m]` for direct
+Anthropic-compatible API participants.
 
 For project-local credentials, copy `.env.example` to `.env`. The CLI loads `<workspace>/.env`
 before waking participants, and `.env` is ignored by Git:
@@ -243,15 +263,18 @@ room play \
 ```
 
 Profiles define participant runtime, model, role, capability scores, authority, and advisory
-weight. The default `advisory-mixed` profile treats Codex as the codebase-grounded planner and
-DeepSeek as a lightweight product/usefulness advisor, not as the final decision-maker.
+weight. Profiles are configuration, not fallback chains: each participant must run through its
+declared runtime, or the wake cycle should fail clearly.
 
 The default profiles map to a simple advisory loop:
 
 - `advisory-mixed`: before work, for complex design or unclear tasks.
 - `debug-recovery`: during work, when the main agent is stuck, tests fail repeatedly, or the bug is unclear.
-- `final-review`: after work, before commit, push, release, or broad use.
-- `cc-review`: when a stronger Claude Code review pass is useful.
+- `final-review`: after work, before commit, push, release, or broad use; Claude Code performs the
+  final review and DeepSeek provides cheap outsider risk, documentation, and usability advice.
+- `cc-review`: when a stronger Claude Code review pass is useful; with `ROOM_CLAUDE_PROVIDER=deepseek`,
+  Claude Code is routed to DeepSeek while the second participant uses the direct DeepSeek API on
+  `deepseek-v4-flash` for a faster cheap-advisor pass.
 
 ## Development
 

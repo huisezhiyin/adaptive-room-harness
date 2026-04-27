@@ -3,7 +3,7 @@
 This demo shows the current Public Alpha loop:
 
 ```text
-complex task -> two Codex participants discuss -> room writes reference packet -> main agent uses it
+complex task -> configured participants discuss -> room writes reference packet -> main agent uses it
 ```
 
 ## 1. Install
@@ -29,7 +29,16 @@ The observer is read-only. It shows room status, recent discussion turns, and ar
 
 ## 3. Run A Complex Ask
 
-In a second terminal:
+In a second terminal, wake a configured profile:
+
+```bash
+.venv/bin/room play \
+  --workspace . \
+  --task "Design a risky architecture migration with rollback concerns." \
+  --profile cc-review
+```
+
+Or use the Codex-oriented wrapper:
 
 ```bash
 .venv/bin/room codex-ask \
@@ -40,7 +49,7 @@ In a second terminal:
 Expected behavior:
 
 - A room is created under `.room/rooms/<room_id>/`.
-- Two Codex participants are invoked with `codex exec`.
+- Configured participants are invoked through their runtime adapters.
 - The default `draft_review_revise` pattern produces draft, review, revise, and final-check turns.
 - Their completed turns are appended to `transcript.jsonl`.
 - The observer page updates through polling.
@@ -73,11 +82,12 @@ To try the older two-independent-opinions behavior:
 
 Expected behavior:
 
-- No Codex participants are woken.
+- No room participants are woken.
 - The response says the task can continue in the main session.
 
 ## Notes
 
 - This alpha uses polling, not token streaming.
+- Runtime failures should be visible. The room should not silently replace one configured runtime with another.
 - The room does not directly edit the workspace.
 - Tests use a fake Codex executable, so development checks do not require a live Codex call.

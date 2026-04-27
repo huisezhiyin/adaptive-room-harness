@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -21,6 +22,10 @@ DEFAULT_CODEX_MODEL = "gpt-5.4"
 CODEX_MODEL_ENV = "ROOM_CODEX_MODEL"
 DEFAULT_CLAUDE_MODEL = "sonnet"
 CLAUDE_MODEL_ENV = "ROOM_CLAUDE_MODEL"
+CLAUDE_PROVIDER_ENV = "ROOM_CLAUDE_PROVIDER"
+CLAUDE_API_KEY_ENV_ENV = "ROOM_CLAUDE_API_KEY_ENV"
+CLAUDE_BARE_ENV = "ROOM_CLAUDE_BARE"
+CLAUDE_DEEPSEEK_MODEL_ENV = "ROOM_CLAUDE_DEEPSEEK_MODEL"
 DEFAULT_ANTHROPIC_MODEL = "deepseek-v4-pro"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
 ANTHROPIC_MODEL_ENV = "ROOM_ANTHROPIC_MODEL"
@@ -45,6 +50,53 @@ def resolve_claude_model(model: str | None = None) -> str:
     if env_model:
         return env_model
     return DEFAULT_CLAUDE_MODEL
+
+
+def claude_uses_deepseek() -> bool:
+    return os.environ.get(CLAUDE_PROVIDER_ENV, "").strip().lower() == "deepseek"
+
+
+def resolve_claude_api_key_env() -> str:
+    return os.environ.get(CLAUDE_API_KEY_ENV_ENV) or resolve_anthropic_api_key_env()
+
+
+def build_claude_deepseek_vars() -> dict[str, str]:
+    env_name = resolve_claude_api_key_env()
+    api_key = os.environ.get(env_name)
+    if not api_key:
+        raise RuntimeError(f"{env_name} is not set")
+
+    model = os.environ.get(CLAUDE_DEEPSEEK_MODEL_ENV) or resolve_anthropic_model()
+    return {
+        "ANTHROPIC_BASE_URL": resolve_anthropic_base_url(),
+        "ANTHROPIC_AUTH_TOKEN": api_key,
+        "ANTHROPIC_API_KEY": api_key,
+        "ANTHROPIC_MODEL": model,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
+        "CLAUDE_CODE_EFFORT_LEVEL": os.environ.get("CLAUDE_CODE_EFFORT_LEVEL", "max"),
+    }
+
+
+def build_claude_env() -> dict[str, str]:
+    env = os.environ.copy()
+    if not claude_uses_deepseek():
+        return env
+
+    env.update(build_claude_deepseek_vars())
+    return env
+
+
+def write_claude_settings_file() -> str | None:
+    if not claude_uses_deepseek():
+        return None
+
+    settings_file = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False)
+    with settings_file:
+        json.dump({"env": build_claude_deepseek_vars()}, settings_file)
+    return settings_file.name
 
 
 def resolve_anthropic_model(model: str | None = None) -> str:
@@ -238,28 +290,40 @@ def run_claude_print(
 ) -> CodexExecResult:
     executable = shutil.which(claude_bin) or claude_bin
     effective_model = resolve_claude_model(model)
-    command = [
-        executable,
-        "-p",
-        "--output-format",
-        "text",
-        "--no-session-persistence",
-        "--permission-mode",
-        "plan",
-        "--tools",
-        "",
-        "--model",
-        effective_model,
-        prompt,
-    ]
-    completed = subprocess.run(
-        command,
-        cwd=workspace,
-        text=True,
-        capture_output=True,
-        timeout=timeout_seconds,
-        check=False,
+    command = [executable]
+    settings_path = write_claude_settings_file()
+    if settings_path:
+        command.extend(["--settings", settings_path])
+    if os.environ.get(CLAUDE_BARE_ENV, "").strip().lower() in {"1", "true", "yes"}:
+        command.append("--bare")
+    command.extend(
+        [
+            "-p",
+            "--output-format",
+            "text",
+            "--no-session-persistence",
+            "--permission-mode",
+            "plan",
+            "--tools",
+            "",
+            "--model",
+            effective_model,
+            prompt,
+        ]
     )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=workspace,
+            env=build_claude_env(),
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    finally:
+        if settings_path:
+            Path(settings_path).unlink(missing_ok=True)
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise RuntimeError(f"claude -p failed with exit code {completed.returncode}: {detail}")

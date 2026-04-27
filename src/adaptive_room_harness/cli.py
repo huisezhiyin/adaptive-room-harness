@@ -180,8 +180,8 @@ def ask(
         str,
         typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
     ] = "draft_review_revise",
-    agent_a: Annotated[str, typer.Option(help="First Codex participant id.")] = "codex_agent_a",
-    agent_b: Annotated[str, typer.Option(help="Second Codex participant id.")] = "codex_agent_b",
+    agent_a: Annotated[str, typer.Option(help="First participant id.")] = "codex_agent_a",
+    agent_b: Annotated[str, typer.Option(help="Second participant id.")] = "codex_agent_b",
     runtime: Annotated[
         str,
         typer.Option(help="Agent runtime: codex-cli, claude-cli, or anthropic-api."),
@@ -405,8 +405,8 @@ def host_ask(
         str,
         typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
     ] = "draft_review_revise",
-    agent_a: Annotated[str, typer.Option(help="First Codex participant id.")] = "codex_agent_a",
-    agent_b: Annotated[str, typer.Option(help="Second Codex participant id.")] = "codex_agent_b",
+    agent_a: Annotated[str, typer.Option(help="First participant id.")] = "codex_agent_a",
+    agent_b: Annotated[str, typer.Option(help="Second participant id.")] = "codex_agent_b",
     runtime: Annotated[
         str,
         typer.Option(help="Agent runtime: codex-cli, claude-cli, or anthropic-api."),
@@ -483,8 +483,8 @@ def codex_ask(
         str,
         typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
     ] = "draft_review_revise",
-    agent_a: Annotated[str, typer.Option(help="First Codex participant id.")] = "codex_agent_a",
-    agent_b: Annotated[str, typer.Option(help="Second Codex participant id.")] = "codex_agent_b",
+    agent_a: Annotated[str, typer.Option(help="First participant id.")] = "codex_agent_a",
+    agent_b: Annotated[str, typer.Option(help="Second participant id.")] = "codex_agent_b",
     runtime: Annotated[
         str,
         typer.Option(help="Agent runtime: codex-cli, claude-cli, or anthropic-api."),
@@ -968,8 +968,8 @@ def wake(
         str,
         typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
     ] = "draft_review_revise",
-    agent_a: Annotated[str, typer.Option(help="First Codex participant id.")] = "codex_agent_a",
-    agent_b: Annotated[str, typer.Option(help="Second Codex participant id.")] = "codex_agent_b",
+    agent_a: Annotated[str, typer.Option(help="First participant id.")] = "codex_agent_a",
+    agent_b: Annotated[str, typer.Option(help="Second participant id.")] = "codex_agent_b",
     runtime: Annotated[
         str,
         typer.Option(

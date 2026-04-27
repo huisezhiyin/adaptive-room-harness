@@ -219,7 +219,7 @@ Long-running work should keep one durable room and wake participants only when u
 OPEN_IDLE -> WAKING -> DISCUSSING -> CAPTURING -> OPEN_IDLE -> CLOSED
 ```
 
-The room is the durable memory boundary. Agent processes are not long-lived by default. Each wake cycle starts fresh `codex exec` participants and gives them:
+The room is the durable memory boundary. Agent processes are not long-lived by default. Each wake cycle starts fresh participant invocations through the configured runtime adapters and gives them:
 
 - `wake_checkpoint.json` when present and authoritative
 - durable artifacts such as `room_summary.md`, `design.md`, and `tasks.md`
@@ -241,18 +241,26 @@ draft_review_revise
 It runs one collaboration round as:
 
 ```text
-codex_agent_a  draft        produce a complete first draft
-codex_agent_b  review       critique the draft with concrete requested changes
-codex_agent_a  revise       revise using the review
-codex_agent_b  final_check  check whether the revised result is ready
+participant_a  draft        produce a complete first draft
+participant_b  review       critique the draft with concrete requested changes
+participant_a  revise       revise using the review
+participant_b  final_check  check whether the revised result is ready
 ```
 
 This makes the transcript show real interaction between equally capable participants. Use `parallel_opinion` when the desired behavior is two independent recommendations instead:
 
 ```text
-codex_agent_a  opinion
-codex_agent_b  opinion
+participant_a  opinion
+participant_b  opinion
 ```
+
+## Runtime Neutrality
+
+The room orchestrates participants, not a single vendor or CLI. A participant can be backed by any supported runtime adapter, currently including `codex-cli`, `claude-cli`, and `anthropic-api`.
+
+Requested runtime is authoritative for a wake cycle. Once a profile or command resolves a participant to a runtime, that participant either runs through that runtime or fails with a visible runtime/configuration error. The harness must not silently reroute a failed `claude-cli` or `anthropic-api` participant to `codex-cli`.
+
+Fallbacks may become useful later, but they must be explicit profile policy and recorded in room artifacts. Hidden fallback would make transcripts misleading because the recorded participant would not match the agent that actually spoke.
 
 Layered hierarchy should be reserved for cases where participants differ in model capability, cost, permissions, or access to tools.
 
@@ -420,11 +428,11 @@ room report
 
 ```text
 simple / low-risk       -> solo recommendation, no agent wake
-complex / uncertain     -> wake cycle with Codex participants
+complex / uncertain     -> wake cycle with configured participants
 force wake              -> wake regardless of triage
 ```
 
-The first implementation uses Codex CLI as the agent adapter and keeps the room contract local-first.
+The first implementation used Codex CLI as the initial agent adapter. The room contract is runtime-neutral and now supports multiple adapters.
 
 `room ask --json` is the intended integration surface for a host agent. It returns machine-readable action, triage, wake metadata, artifact paths, captured design/tasks content, `main_agent_reference`, `room_synthesis`, `approval_state`, and `execution_plan` so the host can decide whether to execute, ask the user for approval, or run another wake cycle.
 

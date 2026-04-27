@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from adaptive_room_harness.models import (
     DecisionEntry,
@@ -179,7 +179,10 @@ def list_states(workspace: Path) -> list[RoomState]:
     for path in sorted(base.iterdir()):
         state_path = path / "state.json"
         if path.is_dir() and state_path.exists():
-            states.append(load_json(state_path, RoomState))
+            try:
+                states.append(load_json(state_path, RoomState))
+            except (json.JSONDecodeError, ValidationError):
+                continue
     return sorted(states, key=lambda state: state.created_at, reverse=True)
 
 

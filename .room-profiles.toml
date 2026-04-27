@@ -41,7 +41,7 @@ capabilities = { coding = 0.85, architecture = 0.9, review = 0.9, product = 0.65
 [[profiles.cc-review.participants]]
 id = "deepseek_advisor"
 runtime = "anthropic-api"
-model = "deepseek-v4-pro"
+model = "deepseek-v4-flash"
 role = "lightweight product, usefulness, and dissenting-opinion advisor"
 authority = "advisory"
 weight = 0.35
@@ -74,7 +74,7 @@ can_block = false
 capabilities = { debugging = 0.55, product = 0.7, review = 0.6, edge_cases = 0.75 }
 
 [profiles.final-review]
-description = "Review completed work before commit, push, release, or broad use."
+description = "Claude Code reviews completed work before commit, push, release, or broad use; DeepSeek provides cheap outsider risk review."
 pattern = "parallel_opinion"
 rounds = 1
 
@@ -91,7 +91,7 @@ capabilities = { review = 0.95, coding = 0.85, architecture = 0.8, risk = 0.9 }
 [[profiles.final-review.participants]]
 id = "deepseek_release_advisor"
 runtime = "anthropic-api"
-model = "deepseek-v4-pro"
+model = "deepseek-v4-flash"
 role = "lightweight release, documentation, usability, and outsider-perspective advisor"
 authority = "advisory"
 weight = 0.35
