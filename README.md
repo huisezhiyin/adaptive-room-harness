@@ -246,6 +246,13 @@ Profiles define participant runtime, model, role, capability scores, authority, 
 weight. The default `advisory-mixed` profile treats Codex as the codebase-grounded planner and
 DeepSeek as a lightweight product/usefulness advisor, not as the final decision-maker.
 
+The default profiles map to a simple advisory loop:
+
+- `advisory-mixed`: before work, for complex design or unclear tasks.
+- `debug-recovery`: during work, when the main agent is stuck, tests fail repeatedly, or the bug is unclear.
+- `final-review`: after work, before commit, push, release, or broad use.
+- `cc-review`: when a stronger Claude Code review pass is useful.
+
 ## Development
 
 ```bash

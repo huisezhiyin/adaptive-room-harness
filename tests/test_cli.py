@@ -680,6 +680,19 @@ def test_profile_loader_falls_back_to_bundled_profiles(tmp_path) -> None:
     assert profile.participants[1].id == "deepseek_advisor"
 
 
+def test_bundled_stage_profiles_are_available(tmp_path) -> None:
+    workspace = tmp_path / "external-workspace"
+
+    debug_profile = load_room_profile(workspace, "debug-recovery")
+    final_profile = load_room_profile(workspace, "final-review")
+
+    assert debug_profile.participants[0].id == "codex_debugger"
+    assert debug_profile.participants[0].can_block is True
+    assert debug_profile.participants[1].weight < debug_profile.participants[0].weight
+    assert final_profile.participants[0].id == "claude_final_reviewer"
+    assert final_profile.participants[1].id == "deepseek_release_advisor"
+
+
 def test_wake_captures_cycle_artifacts_with_fake_codex(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     fake_codex = tmp_path / "codex"

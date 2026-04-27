@@ -47,3 +47,53 @@ authority = "advisory"
 weight = 0.35
 can_block = false
 capabilities = { coding = 0.45, architecture = 0.55, review = 0.6, product = 0.75 }
+
+[profiles.debug-recovery]
+description = "Recover when the main agent is stuck, tests are failing, or the next debugging move is unclear."
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.debug-recovery.participants]]
+id = "codex_debugger"
+runtime = "codex-cli"
+model = "gpt-5.4"
+role = "reconstruct attempts, inspect code reality, and propose the next diagnostic step"
+authority = "primary-debugger"
+weight = 1.0
+can_block = true
+capabilities = { debugging = 0.95, coding = 0.9, architecture = 0.75, review = 0.85 }
+
+[[profiles.debug-recovery.participants]]
+id = "deepseek_hypothesis_advisor"
+runtime = "anthropic-api"
+model = "deepseek-v4-pro"
+role = "lightweight alternative-hypothesis advisor for overlooked assumptions and edge cases"
+authority = "advisory"
+weight = 0.35
+can_block = false
+capabilities = { debugging = 0.55, product = 0.7, review = 0.6, edge_cases = 0.75 }
+
+[profiles.final-review]
+description = "Review completed work before commit, push, release, or broad use."
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.final-review.participants]]
+id = "claude_final_reviewer"
+runtime = "claude-cli"
+model = "sonnet"
+role = "final reviewer for bugs, missing tests, regressions, and release risk"
+authority = "reviewer"
+weight = 0.9
+can_block = true
+capabilities = { review = 0.95, coding = 0.85, architecture = 0.8, risk = 0.9 }
+
+[[profiles.final-review.participants]]
+id = "deepseek_release_advisor"
+runtime = "anthropic-api"
+model = "deepseek-v4-pro"
+role = "lightweight release, documentation, usability, and outsider-perspective advisor"
+authority = "advisory"
+weight = 0.35
+can_block = false
+capabilities = { product = 0.8, documentation = 0.75, review = 0.6, risk = 0.65 }
