@@ -10,6 +10,7 @@ from rich.json import JSON
 from rich.table import Table
 
 from adaptive_room_harness.models import ParticipantKind
+from adaptive_room_harness.profiles import load_room_profile, render_profile_context
 from adaptive_room_harness.server import serve_observer
 from adaptive_room_harness.services import (
     accept_plan,
@@ -40,6 +41,19 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console(width=160)
+
+
+def load_workspace_env(workspace: Path) -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError as exc:
+        raise typer.BadParameter("python-dotenv is not installed") from exc
+    for env_path in [
+        workspace / ".env",
+        Path(__file__).resolve().parents[2] / ".env",
+    ]:
+        if env_path.exists():
+            load_dotenv(env_path, override=False)
 
 
 def room_state(workspace: Path, room_id: str):
@@ -168,18 +182,36 @@ def ask(
     ] = "draft_review_revise",
     agent_a: Annotated[str, typer.Option(help="First Codex participant id.")] = "codex_agent_a",
     agent_b: Annotated[str, typer.Option(help="Second Codex participant id.")] = "codex_agent_b",
+    runtime: Annotated[
+        str,
+        typer.Option(help="Agent runtime: codex-cli, claude-cli, or anthropic-api."),
+    ] = "codex-cli",
     codex_bin: Annotated[str, typer.Option(help="Codex CLI executable.")] = "codex",
+    claude_bin: Annotated[str, typer.Option(help="Claude Code CLI executable.")] = "claude",
     model: Annotated[
         str | None,
-        typer.Option(help="Codex model override. Defaults to ROOM_CODEX_MODEL or gpt-5.4."),
+        typer.Option(help="Model override for the selected runtime."),
     ] = None,
     timeout_seconds: Annotated[int, typer.Option(help="Timeout per agent invocation.")] = 600,
+    anthropic_base_url: Annotated[
+        str | None,
+        typer.Option(help="Anthropic-compatible base URL. Defaults to DeepSeek."),
+    ] = None,
+    anthropic_api_key_env: Annotated[
+        str | None,
+        typer.Option(help="API key env var. Defaults to DEEPSEEK_API_KEY."),
+    ] = None,
+    anthropic_max_tokens: Annotated[
+        int | None,
+        typer.Option(help="Max output tokens for anthropic-api runtime."),
+    ] = None,
     json_output: Annotated[
         bool, typer.Option("--json", help="Print machine-readable JSON.")
     ] = False,
 ) -> None:
     """Triage a task and wake participants only when useful."""
 
+    load_workspace_env(workspace)
     state = room_state(workspace, room) if room else create_room(workspace, task)
     if room and task != state.task:
         record_turn(
@@ -199,9 +231,14 @@ def ask(
             agent_b=agent_b,
             rounds=rounds,
             collaboration_pattern=collaboration_pattern,
+            runtime=runtime,
             codex_bin=codex_bin,
+            claude_bin=claude_bin,
             model=model,
             timeout_seconds=timeout_seconds,
+            anthropic_base_url=anthropic_base_url,
+            anthropic_api_key_env=anthropic_api_key_env,
+            anthropic_max_tokens=anthropic_max_tokens,
         )
     except (RuntimeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -370,15 +407,33 @@ def host_ask(
     ] = "draft_review_revise",
     agent_a: Annotated[str, typer.Option(help="First Codex participant id.")] = "codex_agent_a",
     agent_b: Annotated[str, typer.Option(help="Second Codex participant id.")] = "codex_agent_b",
+    runtime: Annotated[
+        str,
+        typer.Option(help="Agent runtime: codex-cli, claude-cli, or anthropic-api."),
+    ] = "codex-cli",
     codex_bin: Annotated[str, typer.Option(help="Codex CLI executable.")] = "codex",
+    claude_bin: Annotated[str, typer.Option(help="Claude Code CLI executable.")] = "claude",
     model: Annotated[
         str | None,
-        typer.Option(help="Codex model override. Defaults to ROOM_CODEX_MODEL or gpt-5.4."),
+        typer.Option(help="Model override for the selected runtime."),
     ] = None,
     timeout_seconds: Annotated[int, typer.Option(help="Timeout per agent invocation.")] = 600,
+    anthropic_base_url: Annotated[
+        str | None,
+        typer.Option(help="Anthropic-compatible base URL. Defaults to DeepSeek."),
+    ] = None,
+    anthropic_api_key_env: Annotated[
+        str | None,
+        typer.Option(help="API key env var. Defaults to DEEPSEEK_API_KEY."),
+    ] = None,
+    anthropic_max_tokens: Annotated[
+        int | None,
+        typer.Option(help="Max output tokens for anthropic-api runtime."),
+    ] = None,
 ) -> None:
     """Run host-facing task routing and print a machine-readable decision."""
 
+    load_workspace_env(workspace)
     state = room_state(workspace, room) if room else create_room(workspace, task)
     if room and task != state.task:
         record_turn(
@@ -398,9 +453,14 @@ def host_ask(
             agent_b=agent_b,
             rounds=rounds,
             collaboration_pattern=collaboration_pattern,
+            runtime=runtime,
             codex_bin=codex_bin,
+            claude_bin=claude_bin,
             model=model,
             timeout_seconds=timeout_seconds,
+            anthropic_base_url=anthropic_base_url,
+            anthropic_api_key_env=anthropic_api_key_env,
+            anthropic_max_tokens=anthropic_max_tokens,
         )
     except (RuntimeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -425,15 +485,33 @@ def codex_ask(
     ] = "draft_review_revise",
     agent_a: Annotated[str, typer.Option(help="First Codex participant id.")] = "codex_agent_a",
     agent_b: Annotated[str, typer.Option(help="Second Codex participant id.")] = "codex_agent_b",
+    runtime: Annotated[
+        str,
+        typer.Option(help="Agent runtime: codex-cli, claude-cli, or anthropic-api."),
+    ] = "codex-cli",
     codex_bin: Annotated[str, typer.Option(help="Codex CLI executable.")] = "codex",
+    claude_bin: Annotated[str, typer.Option(help="Claude Code CLI executable.")] = "claude",
     model: Annotated[
         str | None,
-        typer.Option(help="Codex model override. Defaults to ROOM_CODEX_MODEL or gpt-5.4."),
+        typer.Option(help="Model override for the selected runtime."),
     ] = None,
     timeout_seconds: Annotated[int, typer.Option(help="Timeout per agent invocation.")] = 600,
+    anthropic_base_url: Annotated[
+        str | None,
+        typer.Option(help="Anthropic-compatible base URL. Defaults to DeepSeek."),
+    ] = None,
+    anthropic_api_key_env: Annotated[
+        str | None,
+        typer.Option(help="API key env var. Defaults to DEEPSEEK_API_KEY."),
+    ] = None,
+    anthropic_max_tokens: Annotated[
+        int | None,
+        typer.Option(help="Max output tokens for anthropic-api runtime."),
+    ] = None,
 ) -> None:
     """Run the Codex-client workflow entrypoint and print a routing packet."""
 
+    load_workspace_env(workspace)
     state = room_state(workspace, room) if room else create_room(workspace, task)
     approval_state = load_approval_state(state) if room and not force_wake else None
     if approval_state and approval_state.status == "accepted":
@@ -471,9 +549,14 @@ def codex_ask(
             agent_b=agent_b,
             rounds=rounds,
             collaboration_pattern=collaboration_pattern,
+            runtime=runtime,
             codex_bin=codex_bin,
+            claude_bin=claude_bin,
             model=model,
             timeout_seconds=timeout_seconds,
+            anthropic_base_url=anthropic_base_url,
+            anthropic_api_key_env=anthropic_api_key_env,
+            anthropic_max_tokens=anthropic_max_tokens,
         )
     except (RuntimeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -742,22 +825,98 @@ def play(
     workspace: Annotated[Path, typer.Option(help="Workspace path.")] = Path("."),
     room: Annotated[str | None, typer.Option(help="Existing room id.")] = None,
     task: Annotated[str | None, typer.Option(help="Task summary when creating a new room.")] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option(help="Room profile from .room-profiles.toml, such as advisory-mixed."),
+    ] = None,
     rounds: Annotated[int, typer.Option(help="Number of two-agent rounds to run.")] = 1,
     collaboration_pattern: Annotated[
         str,
         typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
     ] = "draft_review_revise",
-    agent_a: Annotated[str, typer.Option(help="First Codex participant id.")] = "codex_agent_a",
-    agent_b: Annotated[str, typer.Option(help="Second Codex participant id.")] = "codex_agent_b",
+    agent_a: Annotated[str | None, typer.Option(help="First participant id.")] = None,
+    agent_b: Annotated[str | None, typer.Option(help="Second participant id.")] = None,
+    runtime: Annotated[
+        str,
+        typer.Option(help="Default agent runtime: codex-cli, claude-cli, or anthropic-api."),
+    ] = "codex-cli",
+    agent_a_runtime: Annotated[
+        str | None,
+        typer.Option(help="Runtime override for agent A."),
+    ] = None,
+    agent_b_runtime: Annotated[
+        str | None,
+        typer.Option(help="Runtime override for agent B."),
+    ] = None,
     codex_bin: Annotated[str, typer.Option(help="Codex CLI executable.")] = "codex",
+    claude_bin: Annotated[str, typer.Option(help="Claude Code CLI executable.")] = "claude",
+    agent_a_bin: Annotated[
+        str | None,
+        typer.Option(help="Executable override for agent A when using a CLI runtime."),
+    ] = None,
+    agent_b_bin: Annotated[
+        str | None,
+        typer.Option(help="Executable override for agent B when using a CLI runtime."),
+    ] = None,
     model: Annotated[
         str | None,
-        typer.Option(help="Codex model override. Defaults to ROOM_CODEX_MODEL or gpt-5.4."),
+        typer.Option(help="Default model override for the selected runtime."),
+    ] = None,
+    agent_a_model: Annotated[
+        str | None,
+        typer.Option(help="Model override for agent A."),
+    ] = None,
+    agent_b_model: Annotated[
+        str | None,
+        typer.Option(help="Model override for agent B."),
     ] = None,
     timeout_seconds: Annotated[int, typer.Option(help="Timeout per agent invocation.")] = 600,
+    anthropic_base_url: Annotated[
+        str | None,
+        typer.Option(help="Anthropic-compatible base URL. Defaults to DeepSeek."),
+    ] = None,
+    agent_a_api_base_url: Annotated[
+        str | None,
+        typer.Option(help="Anthropic-compatible base URL override for agent A."),
+    ] = None,
+    agent_b_api_base_url: Annotated[
+        str | None,
+        typer.Option(help="Anthropic-compatible base URL override for agent B."),
+    ] = None,
+    anthropic_api_key_env: Annotated[
+        str | None,
+        typer.Option(help="API key env var. Defaults to DEEPSEEK_API_KEY."),
+    ] = None,
+    anthropic_max_tokens: Annotated[
+        int | None,
+        typer.Option(help="Max output tokens for anthropic-api runtime."),
+    ] = None,
 ) -> None:
-    """Run two Codex CLI agents in the room."""
+    """Run two agents in the room."""
 
+    load_workspace_env(workspace)
+    profile_context = None
+    if profile:
+        try:
+            room_profile = load_room_profile(workspace, profile)
+        except (FileNotFoundError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        first, second = room_profile.participants[:2]
+        collaboration_pattern = room_profile.pattern
+        rounds = room_profile.rounds
+        agent_a = agent_a or first.id
+        agent_b = agent_b or second.id
+        agent_a_runtime = agent_a_runtime or first.runtime
+        agent_b_runtime = agent_b_runtime or second.runtime
+        agent_a_model = agent_a_model or first.model
+        agent_b_model = agent_b_model or second.model
+        agent_a_bin = agent_a_bin or first.bin
+        agent_b_bin = agent_b_bin or second.bin
+        agent_a_api_base_url = agent_a_api_base_url or first.api_base_url
+        agent_b_api_base_url = agent_b_api_base_url or second.api_base_url
+        profile_context = render_profile_context(room_profile)
+    agent_a = agent_a or "codex_agent_a"
+    agent_b = agent_b or "codex_agent_b"
     if room:
         state = room_state(workspace, room)
     else:
@@ -768,13 +927,27 @@ def play(
     try:
         turns = play_codex_agents(
             state,
+            durable_context=profile_context,
             agent_a=agent_a,
             agent_b=agent_b,
             rounds=rounds,
             collaboration_pattern=collaboration_pattern,
+            runtime=runtime,
+            agent_a_runtime=agent_a_runtime,
+            agent_b_runtime=agent_b_runtime,
             codex_bin=codex_bin,
+            claude_bin=claude_bin,
             model=model,
+            agent_a_model=agent_a_model,
+            agent_b_model=agent_b_model,
+            agent_a_bin=agent_a_bin,
+            agent_b_bin=agent_b_bin,
+            agent_a_api_base_url=agent_a_api_base_url,
+            agent_b_api_base_url=agent_b_api_base_url,
             timeout_seconds=timeout_seconds,
+            anthropic_base_url=anthropic_base_url,
+            anthropic_api_key_env=anthropic_api_key_env,
+            anthropic_max_tokens=anthropic_max_tokens,
         )
     except (RuntimeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -797,15 +970,35 @@ def wake(
     ] = "draft_review_revise",
     agent_a: Annotated[str, typer.Option(help="First Codex participant id.")] = "codex_agent_a",
     agent_b: Annotated[str, typer.Option(help="Second Codex participant id.")] = "codex_agent_b",
+    runtime: Annotated[
+        str,
+        typer.Option(
+            help="Agent runtime: codex-cli, claude-cli, or anthropic-api."
+        ),
+    ] = "codex-cli",
     codex_bin: Annotated[str, typer.Option(help="Codex CLI executable.")] = "codex",
+    claude_bin: Annotated[str, typer.Option(help="Claude Code CLI executable.")] = "claude",
     model: Annotated[
         str | None,
-        typer.Option(help="Codex model override. Defaults to ROOM_CODEX_MODEL or gpt-5.4."),
+        typer.Option(help="Model override for the selected runtime."),
     ] = None,
     timeout_seconds: Annotated[int, typer.Option(help="Timeout per agent invocation.")] = 600,
+    anthropic_base_url: Annotated[
+        str | None,
+        typer.Option(help="Anthropic-compatible base URL. Defaults to DeepSeek."),
+    ] = None,
+    anthropic_api_key_env: Annotated[
+        str | None,
+        typer.Option(help="API key env var. Defaults to DEEPSEEK_API_KEY."),
+    ] = None,
+    anthropic_max_tokens: Annotated[
+        int | None,
+        typer.Option(help="Max output tokens for anthropic-api runtime."),
+    ] = None,
 ) -> None:
     """Wake room participants for one discussion/capture cycle."""
 
+    load_workspace_env(workspace)
     if room:
         state = room_state(workspace, room)
     else:
@@ -821,9 +1014,14 @@ def wake(
             agent_b=agent_b,
             rounds=rounds,
             collaboration_pattern=collaboration_pattern,
+            runtime=runtime,
             codex_bin=codex_bin,
+            claude_bin=claude_bin,
             model=model,
             timeout_seconds=timeout_seconds,
+            anthropic_base_url=anthropic_base_url,
+            anthropic_api_key_env=anthropic_api_key_env,
+            anthropic_max_tokens=anthropic_max_tokens,
         )
     except (RuntimeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc

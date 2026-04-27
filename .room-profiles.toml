@@ -1,0 +1,49 @@
+[profiles.advisory-mixed]
+description = "Codex plans from codebase reality; DeepSeek acts as a lightweight product/usefulness advisor."
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.advisory-mixed.participants]]
+id = "codex_planner"
+runtime = "codex-cli"
+model = "gpt-5.4"
+role = "codebase-grounded planner"
+authority = "primary"
+weight = 1.0
+can_block = true
+capabilities = { coding = 0.95, architecture = 0.9, review = 0.8, product = 0.6 }
+
+[[profiles.advisory-mixed.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+model = "deepseek-v4-pro"
+role = "lightweight product, usefulness, and dissenting-opinion advisor"
+authority = "advisory"
+weight = 0.35
+can_block = false
+capabilities = { coding = 0.45, architecture = 0.55, review = 0.6, product = 0.75 }
+
+[profiles.cc-review]
+description = "Claude Code reviews architecture or implementation plans while DeepSeek provides lightweight product pushback."
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.cc-review.participants]]
+id = "claude_reviewer"
+runtime = "claude-cli"
+model = "sonnet"
+role = "architecture and implementation reviewer"
+authority = "reviewer"
+weight = 0.9
+can_block = true
+capabilities = { coding = 0.85, architecture = 0.9, review = 0.9, product = 0.65 }
+
+[[profiles.cc-review.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+model = "deepseek-v4-pro"
+role = "lightweight product, usefulness, and dissenting-opinion advisor"
+authority = "advisory"
+weight = 0.35
+can_block = false
+capabilities = { coding = 0.45, architecture = 0.55, review = 0.6, product = 0.75 }

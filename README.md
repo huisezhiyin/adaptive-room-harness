@@ -164,6 +164,88 @@ or:
 room codex-ask --workspace . --task "..." --model <model>
 ```
 
+## Claude Code And DeepSeek Runtimes
+
+The Claude Code adapter runs `claude -p` in non-interactive mode:
+
+```bash
+room play \
+  --workspace . \
+  --task "Review this architecture plan." \
+  --runtime claude-cli \
+  --model sonnet \
+  --collaboration-pattern parallel_opinion
+```
+
+Claude Code keeps its own authentication outside the repository. To route Claude Code through
+an Anthropic-compatible gateway, configure the relevant Claude Code environment variables before
+running `room`.
+
+For project-local credentials, copy `.env.example` to `.env`. The CLI loads `<workspace>/.env`
+before waking participants, and `.env` is ignored by Git:
+
+```bash
+cp .env.example .env
+$EDITOR .env
+```
+
+The alpha can also wake participants through an Anthropic-compatible Messages API. The default endpoint is DeepSeek:
+
+```bash
+export DEEPSEEK_API_KEY=<your-key>
+
+room play \
+  --workspace . \
+  --task "Review this architecture plan." \
+  --runtime anthropic-api \
+  --model deepseek-v4-pro \
+  --collaboration-pattern parallel_opinion
+```
+
+The API key is read from the environment and is not written to room artifacts. Override the endpoint or key variable when using another Anthropic-compatible provider:
+
+```bash
+room play \
+  --runtime anthropic-api \
+  --anthropic-base-url https://api.deepseek.com/anthropic \
+  --anthropic-api-key-env DEEPSEEK_API_KEY \
+  --model deepseek-v4-pro \
+  --task "..."
+```
+
+`room play` can mix runtimes per participant:
+
+```bash
+room play \
+  --workspace . \
+  --task "Codex drafts the implementation plan; DeepSeek reviews product value." \
+  --collaboration-pattern parallel_opinion \
+  --agent-a codex_planner \
+  --agent-a-runtime codex-cli \
+  --agent-a-model gpt-5.4 \
+  --agent-b deepseek_reviewer \
+  --agent-b-runtime anthropic-api \
+  --agent-b-model deepseek-v4-pro
+```
+
+Participant-specific flags override the default `--runtime` and `--model` values for that
+speaker. This first alpha slice keeps the mixed-runtime surface intentionally small:
+`--agent-a-runtime`, `--agent-b-runtime`, `--agent-a-model`, `--agent-b-model`,
+`--agent-a-bin`, `--agent-b-bin`, `--agent-a-api-base-url`, and `--agent-b-api-base-url`.
+
+For repeated use, prefer a profile in `.room-profiles.toml`:
+
+```bash
+room play \
+  --workspace . \
+  --task "Discuss the next implementation slice." \
+  --profile advisory-mixed
+```
+
+Profiles define participant runtime, model, role, capability scores, authority, and advisory
+weight. The default `advisory-mixed` profile treats Codex as the codebase-grounded planner and
+DeepSeek as a lightweight product/usefulness advisor, not as the final decision-maker.
+
 ## Development
 
 ```bash

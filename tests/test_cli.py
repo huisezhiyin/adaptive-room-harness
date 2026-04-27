@@ -1,4 +1,5 @@
 import json
+import types
 from http.server import ThreadingHTTPServer
 from threading import Thread
 from urllib.request import urlopen
@@ -6,6 +7,7 @@ from urllib.request import urlopen
 from typer.testing import CliRunner
 
 from adaptive_room_harness.cli import app
+from adaptive_room_harness.profiles import load_room_profile
 from adaptive_room_harness.server import build_room_payload, make_handler
 
 runner = CliRunner()
@@ -280,6 +282,402 @@ printf "parallel response from %s at %s\\nNext: continue.\\n" "$agent" "$step" >
     assert state["collaboration_pattern"] == "parallel_opinion"
     assert "parallel response from codex_agent_a at opinion" in transcript
     assert "parallel response from codex_agent_b at opinion" in transcript
+
+
+def test_play_runs_anthropic_api_runtime_without_logging_key(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    calls: list[dict[str, object]] = []
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(
+                content=[types.SimpleNamespace(text="deepseek response\nNext: continue.")]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            calls.append({"client": kwargs})
+            self.messages = FakeMessages()
+
+    monkeypatch.setenv("FAKE_DEEPSEEK_KEY", "secret-value-that-must-not-be-written")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Let two DeepSeek participants discuss the MVP shape.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--runtime",
+            "anthropic-api",
+            "--model",
+            "deepseek-v4-pro",
+            "--anthropic-api-key-env",
+            "FAKE_DEEPSEEK_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "played 2 agent turns" in result.stdout
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    room_path = workspace / ".room" / "rooms" / room_id
+    transcript = (room_path / "transcript.jsonl").read_text()
+    assert "deepseek response" in transcript
+    assert "secret-value-that-must-not-be-written" not in transcript
+    assert calls[0]["client"]["api_key"] == "secret-value-that-must-not-be-written"
+    assert calls[0]["client"]["base_url"] == "https://api.deepseek.com/anthropic"
+    assert calls[1]["model"] == "deepseek-v4-pro"
+
+
+def test_play_loads_workspace_env_for_anthropic_runtime(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath(".env").write_text(
+        "DEEPSEEK_API_KEY=secret-from-dotenv\n"
+        "ROOM_ANTHROPIC_MODEL=deepseek-v4-pro\n"
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(content=[types.SimpleNamespace(text="dotenv response")])
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            calls.append({"client": kwargs})
+            self.messages = FakeMessages()
+
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("ROOM_ANTHROPIC_MODEL", raising=False)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Use dotenv.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--runtime",
+            "anthropic-api",
+        ],
+    )
+
+    assert result.exit_code == 0
+    transcript = next((workspace / ".room" / "rooms").glob("room_*/transcript.jsonl")).read_text()
+    assert "dotenv response" in transcript
+    assert "secret-from-dotenv" not in transcript
+    assert calls[0]["client"]["api_key"] == "secret-from-dotenv"
+    assert calls[1]["model"] == "deepseek-v4-pro"
+
+
+def test_play_runs_claude_cli_runtime_with_fake_claude(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    fake_claude = tmp_path / "claude"
+    args_log = tmp_path / "claude-args.log"
+    fake_claude.write_text(
+        f"""#!/bin/sh
+printf "%s\\n" "$*" >> "{args_log}"
+printf "fake claude response\\nNext: continue.\\n"
+""",
+    )
+    fake_claude.chmod(0o755)
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Let two Claude participants discuss the MVP shape.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--runtime",
+            "claude-cli",
+            "--claude-bin",
+            str(fake_claude),
+            "--model",
+            "sonnet",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "played 2 agent turns" in result.stdout
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    room_path = workspace / ".room" / "rooms" / room_id
+    transcript = (room_path / "transcript.jsonl").read_text()
+    assert "fake claude response" in transcript
+    args = args_log.read_text()
+    assert "--model sonnet" in args
+    assert "--no-session-persistence" in args
+
+
+def test_play_supports_mixed_participant_runtimes(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    fake_codex = tmp_path / "codex"
+    fake_claude = tmp_path / "claude"
+    codex_args_log = tmp_path / "codex-args.log"
+    claude_args_log = tmp_path / "claude-args.log"
+    fake_codex.write_text(
+        f"""#!/bin/sh
+printf "%s\\n" "$*" >> "{codex_args_log}"
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+printf "fake codex mixed response\\nNext: continue.\\n" > "$out"
+""",
+    )
+    fake_claude.write_text(
+        f"""#!/bin/sh
+printf "%s\\n" "$*" >> "{claude_args_log}"
+printf "fake claude mixed response\\nNext: continue.\\n"
+""",
+    )
+    fake_codex.chmod(0o755)
+    fake_claude.chmod(0o755)
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Mix Codex and Claude participants.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--agent-a-runtime",
+            "codex-cli",
+            "--agent-b-runtime",
+            "claude-cli",
+            "--agent-a-bin",
+            str(fake_codex),
+            "--agent-b-bin",
+            str(fake_claude),
+            "--agent-a-model",
+            "gpt-test",
+            "--agent-b-model",
+            "sonnet-test",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "played 2 agent turns" in result.stdout
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    room_path = workspace / ".room" / "rooms" / room_id
+    transcript = (room_path / "transcript.jsonl").read_text()
+    assert "fake codex mixed response" in transcript
+    assert "fake claude mixed response" in transcript
+    assert "--model gpt-test" in codex_args_log.read_text()
+    assert "--model sonnet-test" in claude_args_log.read_text()
+
+
+def test_play_supports_mixed_codex_and_anthropic_participants(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    fake_codex = tmp_path / "codex"
+    codex_args_log = tmp_path / "codex-args.log"
+    calls: list[dict[str, object]] = []
+    fake_codex.write_text(
+        f"""#!/bin/sh
+printf "%s\\n" "$*" >> "{codex_args_log}"
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+printf "fake codex plus api response\\nNext: continue.\\n" > "$out"
+""",
+    )
+    fake_codex.chmod(0o755)
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(content=[types.SimpleNamespace(text="fake api response")])
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            calls.append({"client": kwargs})
+            self.messages = FakeMessages()
+
+    monkeypatch.setenv("FAKE_DEEPSEEK_KEY", "secret-value-that-must-not-be-written")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Mix Codex and DeepSeek participants.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--agent-a-runtime",
+            "codex-cli",
+            "--agent-b-runtime",
+            "anthropic-api",
+            "--agent-a-bin",
+            str(fake_codex),
+            "--agent-a-model",
+            "gpt-test",
+            "--agent-b-model",
+            "deepseek-v4-pro",
+            "--agent-b-api-base-url",
+            "https://example.test/anthropic",
+            "--anthropic-api-key-env",
+            "FAKE_DEEPSEEK_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    transcript = (workspace / ".room" / "rooms" / room_id / "transcript.jsonl").read_text()
+    assert "fake codex plus api response" in transcript
+    assert "fake api response" in transcript
+    assert "secret-value-that-must-not-be-written" not in transcript
+    assert "--model gpt-test" in codex_args_log.read_text()
+    assert calls[0]["client"]["base_url"] == "https://example.test/anthropic"
+    assert calls[1]["model"] == "deepseek-v4-pro"
+
+
+def test_play_profile_loads_participant_roles_and_runtimes(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    fake_codex = tmp_path / "codex"
+    codex_args_log = tmp_path / "codex-args.log"
+    calls: list[dict[str, object]] = []
+    workspace.joinpath(".room-profiles.toml").write_text(
+        f"""
+[profiles.advisory-mixed]
+description = "Test mixed profile"
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.advisory-mixed.participants]]
+id = "codex_planner"
+runtime = "codex-cli"
+model = "gpt-profile"
+role = "codebase planner"
+authority = "primary"
+weight = 1.0
+can_block = true
+bin = "{fake_codex}"
+capabilities = {{ coding = 0.95 }}
+
+[[profiles.advisory-mixed.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+model = "deepseek-profile"
+role = "lightweight product advisor"
+authority = "advisory"
+weight = 0.35
+can_block = false
+api_base_url = "https://profile.test/anthropic"
+capabilities = {{ product = 0.75 }}
+""",
+    )
+    fake_codex.write_text(
+        f"""#!/bin/sh
+printf "%s\\n" "$*" >> "{codex_args_log}"
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+prompt=$(cat)
+printf "%s" "$prompt" > "{tmp_path / "codex-prompt.txt"}"
+printf "profile codex response\\nNext: continue.\\n" > "$out"
+""",
+    )
+    fake_codex.chmod(0o755)
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(
+                content=[types.SimpleNamespace(text="profile api response")]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            calls.append({"client": kwargs})
+            self.messages = FakeMessages()
+
+    monkeypatch.setenv("FAKE_DEEPSEEK_KEY", "secret-value-that-must-not-be-written")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Use a room profile.",
+            "--profile",
+            "advisory-mixed",
+            "--anthropic-api-key-env",
+            "FAKE_DEEPSEEK_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    transcript = (workspace / ".room" / "rooms" / room_id / "transcript.jsonl").read_text()
+    assert "codex_planner" in transcript
+    assert "deepseek_advisor" in transcript
+    assert "profile codex response" in transcript
+    assert "profile api response" in transcript
+    assert "--model gpt-profile" in codex_args_log.read_text()
+    assert "role: codebase planner" in (tmp_path / "codex-prompt.txt").read_text()
+    assert calls[0]["client"]["base_url"] == "https://profile.test/anthropic"
+    assert calls[1]["model"] == "deepseek-profile"
+
+
+def test_profile_loader_falls_back_to_bundled_profiles(tmp_path) -> None:
+    profile = load_room_profile(tmp_path / "external-workspace", "advisory-mixed")
+
+    assert profile.name == "advisory-mixed"
+    assert profile.participants[0].id == "codex_planner"
+    assert profile.participants[1].id == "deepseek_advisor"
 
 
 def test_wake_captures_cycle_artifacts_with_fake_codex(tmp_path) -> None:

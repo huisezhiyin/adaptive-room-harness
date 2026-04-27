@@ -6,6 +6,9 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+AgentRuntime = Literal["codex-cli", "claude-cli", "anthropic-api"]
 
 
 @dataclass(frozen=True)
@@ -16,6 +19,14 @@ class CodexExecResult:
 
 DEFAULT_CODEX_MODEL = "gpt-5.4"
 CODEX_MODEL_ENV = "ROOM_CODEX_MODEL"
+DEFAULT_CLAUDE_MODEL = "sonnet"
+CLAUDE_MODEL_ENV = "ROOM_CLAUDE_MODEL"
+DEFAULT_ANTHROPIC_MODEL = "deepseek-v4-pro"
+DEFAULT_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+ANTHROPIC_MODEL_ENV = "ROOM_ANTHROPIC_MODEL"
+ANTHROPIC_BASE_URL_ENV = "ROOM_ANTHROPIC_BASE_URL"
+ANTHROPIC_API_KEY_ENV_ENV = "ROOM_ANTHROPIC_API_KEY_ENV"
+ANTHROPIC_MAX_TOKENS_ENV = "ROOM_ANTHROPIC_MAX_TOKENS"
 
 
 def resolve_codex_model(model: str | None = None) -> str:
@@ -25,6 +36,51 @@ def resolve_codex_model(model: str | None = None) -> str:
     if env_model:
         return env_model
     return DEFAULT_CODEX_MODEL
+
+
+def resolve_claude_model(model: str | None = None) -> str:
+    if model:
+        return model
+    env_model = os.environ.get(CLAUDE_MODEL_ENV)
+    if env_model:
+        return env_model
+    return DEFAULT_CLAUDE_MODEL
+
+
+def resolve_anthropic_model(model: str | None = None) -> str:
+    if model:
+        return model
+    env_model = os.environ.get(ANTHROPIC_MODEL_ENV)
+    if env_model:
+        return env_model
+    return DEFAULT_ANTHROPIC_MODEL
+
+
+def resolve_anthropic_base_url(base_url: str | None = None) -> str:
+    if base_url:
+        return base_url
+    env_base_url = os.environ.get(ANTHROPIC_BASE_URL_ENV)
+    if env_base_url:
+        return env_base_url
+    return DEFAULT_ANTHROPIC_BASE_URL
+
+
+def resolve_anthropic_api_key_env(api_key_env: str | None = None) -> str:
+    if api_key_env:
+        return api_key_env
+    env_name = os.environ.get(ANTHROPIC_API_KEY_ENV_ENV)
+    if env_name:
+        return env_name
+    return "DEEPSEEK_API_KEY"
+
+
+def resolve_anthropic_max_tokens(max_tokens: int | None = None) -> int:
+    if max_tokens:
+        return max_tokens
+    env_value = os.environ.get(ANTHROPIC_MAX_TOKENS_ENV)
+    if env_value:
+        return int(env_value)
+    return 2000
 
 
 def render_agent_prompt(
@@ -113,3 +169,139 @@ def run_codex_exec(
     if not output:
         output = completed.stdout.strip()
     return CodexExecResult(command=command, output=output.strip())
+
+
+def run_anthropic_messages(
+    *,
+    prompt: str,
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key_env: str | None = None,
+    max_tokens: int | None = None,
+    timeout_seconds: int = 600,
+) -> CodexExecResult:
+    env_name = resolve_anthropic_api_key_env(api_key_env)
+    api_key = os.environ.get(env_name)
+    if not api_key:
+        raise RuntimeError(f"{env_name} is not set")
+
+    try:
+        import anthropic
+    except ImportError as exc:
+        raise RuntimeError("anthropic package is not installed") from exc
+
+    effective_model = resolve_anthropic_model(model)
+    effective_base_url = resolve_anthropic_base_url(base_url)
+    client = anthropic.Anthropic(
+        api_key=api_key,
+        base_url=effective_base_url,
+        timeout=timeout_seconds,
+    )
+    message = client.messages.create(
+        model=effective_model,
+        max_tokens=resolve_anthropic_max_tokens(max_tokens),
+        system="You are a careful coding-agent room participant.",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}],
+            }
+        ],
+    )
+    output_parts: list[str] = []
+    for block in message.content:
+        text = getattr(block, "text", None)
+        if text:
+            output_parts.append(text)
+    output = "\n".join(output_parts).strip()
+    return CodexExecResult(
+        command=[
+            "anthropic-messages",
+            "--base-url",
+            effective_base_url,
+            "--model",
+            effective_model,
+            "--api-key-env",
+            env_name,
+        ],
+        output=output,
+    )
+
+
+def run_claude_print(
+    *,
+    claude_bin: str,
+    workspace: Path,
+    prompt: str,
+    model: str | None = None,
+    timeout_seconds: int = 600,
+) -> CodexExecResult:
+    executable = shutil.which(claude_bin) or claude_bin
+    effective_model = resolve_claude_model(model)
+    command = [
+        executable,
+        "-p",
+        "--output-format",
+        "text",
+        "--no-session-persistence",
+        "--permission-mode",
+        "plan",
+        "--tools",
+        "",
+        "--model",
+        effective_model,
+        prompt,
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=workspace,
+        text=True,
+        capture_output=True,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"claude -p failed with exit code {completed.returncode}: {detail}")
+    return CodexExecResult(command=command[:-1] + ["<prompt>"], output=completed.stdout.strip())
+
+
+def run_agent_runtime(
+    *,
+    runtime: AgentRuntime,
+    codex_bin: str,
+    claude_bin: str,
+    workspace: Path,
+    prompt: str,
+    model: str | None = None,
+    timeout_seconds: int = 600,
+    anthropic_base_url: str | None = None,
+    anthropic_api_key_env: str | None = None,
+    anthropic_max_tokens: int | None = None,
+) -> CodexExecResult:
+    if runtime == "codex-cli":
+        return run_codex_exec(
+            codex_bin=codex_bin,
+            workspace=workspace,
+            prompt=prompt,
+            model=model,
+            timeout_seconds=timeout_seconds,
+        )
+    if runtime == "claude-cli":
+        return run_claude_print(
+            claude_bin=claude_bin,
+            workspace=workspace,
+            prompt=prompt,
+            model=model,
+            timeout_seconds=timeout_seconds,
+        )
+    if runtime == "anthropic-api":
+        return run_anthropic_messages(
+            prompt=prompt,
+            model=model,
+            base_url=anthropic_base_url,
+            api_key_env=anthropic_api_key_env,
+            max_tokens=anthropic_max_tokens,
+            timeout_seconds=timeout_seconds,
+        )
+    raise RuntimeError(f"unsupported agent runtime: {runtime}")

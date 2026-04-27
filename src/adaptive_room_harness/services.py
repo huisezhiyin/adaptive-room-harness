@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from adaptive_room_harness.agents import render_agent_prompt, run_codex_exec
+from adaptive_room_harness.agents import AgentRuntime, render_agent_prompt, run_agent_runtime
 from adaptive_room_harness.models import (
     ApprovalState,
     CollaborationPattern,
@@ -226,9 +226,22 @@ def play_codex_agents(
     agent_b: str = "codex_agent_b",
     rounds: int = 1,
     collaboration_pattern: CollaborationPattern = "draft_review_revise",
+    runtime: AgentRuntime = "codex-cli",
+    agent_a_runtime: AgentRuntime | None = None,
+    agent_b_runtime: AgentRuntime | None = None,
     codex_bin: str = "codex",
+    claude_bin: str = "claude",
     model: str | None = None,
+    agent_a_model: str | None = None,
+    agent_b_model: str | None = None,
+    agent_a_bin: str | None = None,
+    agent_b_bin: str | None = None,
+    agent_a_api_base_url: str | None = None,
+    agent_b_api_base_url: str | None = None,
     timeout_seconds: int = 600,
+    anthropic_base_url: str | None = None,
+    anthropic_api_key_env: str | None = None,
+    anthropic_max_tokens: int | None = None,
 ) -> list[TranscriptTurn]:
     if rounds < 1:
         raise ValueError("rounds must be at least 1")
@@ -245,10 +258,26 @@ def play_codex_agents(
     task_text = render_wake_task(state, wake_goal=wake_goal, durable_context=durable_context)
     for round_number in range(1, rounds + 1):
         for step in collaboration_steps(collaboration_pattern, agent_a=agent_a, agent_b=agent_b):
+            speaker_id = step["speaker_id"]
+            is_agent_a = speaker_id == agent_a
+            speaker_runtime = (
+                agent_a_runtime if is_agent_a else agent_b_runtime
+            ) or runtime
+            speaker_model = (agent_a_model if is_agent_a else agent_b_model) or model
+            speaker_bin = agent_a_bin if is_agent_a else agent_b_bin
+            speaker_api_base_url = (
+                agent_a_api_base_url if is_agent_a else agent_b_api_base_url
+            ) or anthropic_base_url
+            speaker_codex_bin = (
+                speaker_bin if speaker_runtime == "codex-cli" and speaker_bin else codex_bin
+            )
+            speaker_claude_bin = (
+                speaker_bin if speaker_runtime == "claude-cli" and speaker_bin else claude_bin
+            )
             prompt = render_agent_prompt(
                 room_id=state.room_id,
                 task=task_text,
-                agent_id=step["speaker_id"],
+                agent_id=speaker_id,
                 peer_id=step["peer_id"],
                 round_number=round_number,
                 collaboration_pattern=collaboration_pattern,
@@ -256,16 +285,21 @@ def play_codex_agents(
                 step_instruction=step["instruction"],
                 transcript_excerpt=render_transcript_excerpt(state),
             )
-            result = run_codex_exec(
-                codex_bin=codex_bin,
+            result = run_agent_runtime(
+                runtime=speaker_runtime,
+                codex_bin=speaker_codex_bin,
+                claude_bin=speaker_claude_bin,
                 workspace=Path(state.workspace),
                 prompt=prompt,
-                model=model,
+                model=speaker_model,
                 timeout_seconds=timeout_seconds,
+                anthropic_base_url=speaker_api_base_url,
+                anthropic_api_key_env=anthropic_api_key_env,
+                anthropic_max_tokens=anthropic_max_tokens,
             )
             turn = record_turn(
                 state,
-                speaker_id=step["speaker_id"],
+                speaker_id=speaker_id,
                 content=result.output,
                 turn_type=f"AGENT_{step['step'].upper()}",
             )
@@ -283,9 +317,14 @@ def wake_room(
     agent_b: str = "codex_agent_b",
     rounds: int = 1,
     collaboration_pattern: CollaborationPattern = "draft_review_revise",
+    runtime: AgentRuntime = "codex-cli",
     codex_bin: str = "codex",
+    claude_bin: str = "claude",
     model: str | None = None,
     timeout_seconds: int = 600,
+    anthropic_base_url: str | None = None,
+    anthropic_api_key_env: str | None = None,
+    anthropic_max_tokens: int | None = None,
 ) -> dict[str, object]:
     cycle_id = next_cycle_id(state)
     cycle_path = room_path(Path(state.workspace), state.room_id) / "cycles" / cycle_id
@@ -305,9 +344,14 @@ def wake_room(
         agent_b=agent_b,
         rounds=rounds,
         collaboration_pattern=collaboration_pattern,
+        runtime=runtime,
         codex_bin=codex_bin,
+        claude_bin=claude_bin,
         model=model,
         timeout_seconds=timeout_seconds,
+        anthropic_base_url=anthropic_base_url,
+        anthropic_api_key_env=anthropic_api_key_env,
+        anthropic_max_tokens=anthropic_max_tokens,
     )
     state.status = "OPEN_IDLE"
     save_state(state)
@@ -333,9 +377,14 @@ def ask_room(
     agent_b: str = "codex_agent_b",
     rounds: int = 1,
     collaboration_pattern: CollaborationPattern = "draft_review_revise",
+    runtime: AgentRuntime = "codex-cli",
     codex_bin: str = "codex",
+    claude_bin: str = "claude",
     model: str | None = None,
     timeout_seconds: int = 600,
+    anthropic_base_url: str | None = None,
+    anthropic_api_key_env: str | None = None,
+    anthropic_max_tokens: int | None = None,
 ) -> dict[str, object]:
     triage = triage_room(state, task_text=ask_text)
     should_wake = force_wake or triage.need_activation
@@ -359,9 +408,14 @@ def ask_room(
         agent_b=agent_b,
         rounds=rounds,
         collaboration_pattern=collaboration_pattern,
+        runtime=runtime,
         codex_bin=codex_bin,
+        claude_bin=claude_bin,
         model=model,
         timeout_seconds=timeout_seconds,
+        anthropic_base_url=anthropic_base_url,
+        anthropic_api_key_env=anthropic_api_key_env,
+        anthropic_max_tokens=anthropic_max_tokens,
     )
     result["action"] = "wake"
     result["wake"] = wake_result
