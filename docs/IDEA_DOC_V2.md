@@ -135,6 +135,55 @@ memory                  -> project context provider / capture sink
 
 弱模型或专家模型可以承担更窄、更结构化的任务。
 
+### 2.5 长任务里 Room 常驻，参与者按需唤醒
+
+长任务不应该每次都丢失上下文，也不应该让多个 agent 进程一直常驻心跳。
+
+MVP 的生命周期原则是：
+
+```text
+Room owns memory. Agents own one wake-cycle of reasoning.
+```
+
+也就是说：
+
+```text
+长任务 = 一个长期 Room
+讨论 = 多个按需 wake cycle
+```
+
+Room 以本地文件形式保持存在，状态通常停在 `OPEN_IDLE` 或 `DISCUSSION`。当主 Agent 判断当前任务复杂、不确定、有风险，或需要设计/拆解/review 时，才唤醒参与者跑一轮讨论。讨论结束后，参与者回到 sleeping/idle，Room 将 transcript、summary、design、tasks、wake checkpoint、execution plan、decisions 等内容落地。
+
+默认不做“agent 常驻在线”：
+
+```text
+OPEN_IDLE
+  -> WAKING
+  -> DISCUSSING
+  -> CAPTURING
+  -> OPEN_IDLE
+  -> CLOSED
+```
+
+常驻 agent / 心跳模式可以作为未来能力，但需要明确事件源、权限模型、压缩策略、打断机制和 UI 可观测性。MVP 先采用更稳定、可审计、成本可控的按需唤醒模式。
+
+每次 wake 的上下文分层：
+
+```text
+优先读取：artifacts/wake_checkpoint.json
+必须读取：artifacts/room_summary.md、design.md、tasks.md、execution_plan.json、open_questions.md、decisions.md
+按需读取：最近 N 条 transcript
+不直接读取：完整 transcript，仅作为审计和回溯资料
+```
+
+这让 agent 保持“本轮无状态”，但 Room 保持“长期有记忆”。
+
+`wake_checkpoint.json` 解决“下一次怎么恢复讨论上下文”，`main_agent_reference.json` 解决“本次讨论之后主 Agent 拿什么做参考”。Public Alpha 默认是 advisory-first：Room 输出参考包，主 Agent 保持最终决策和执行责任。`execution_plan.json`、`room_synthesis.json` 和 `approval_state.json` 作为更严格治理或复核流程的补充 artifact。
+
+Codex 客户端接入时可以使用更薄的 `room host-ask`：它在 `room ask` 的结果上追加 `host_decision`，把下一步规整成 `continue_solo`、`ask_user`、`execute`、`wake_again` 或 `review_only`。这样客户端不需要理解所有 Room 细节，只需要按 host decision 决定继续执行、展示给用户、或再次唤醒 Room。
+
+更贴近 Codex 客户端的入口是 `room codex-ask`。它在 `host_decision` 之上追加 `codex_workflow`，把下一步转成主 Codex 可直接执行的 `codex_action`，例如 `continue_main_session`、`execute_with_room_reference`、`present_room_output_for_approval`、`execute_accepted_plan`、`wake_room_again`、`summarize_review_only`。
+
 ---
 
 ## 3. 核心抽象
@@ -874,4 +923,3 @@ Council Harness v2 是一个本地优先的自适应协作聊天室。
 一句话版本：
 
 > Council Harness v2 是主 Agent 的自适应协作房间：平时安静，必要时召集参谋、工具、专家和记忆一起讨论，最后由主 Agent 收敛、执行和沉淀。
-

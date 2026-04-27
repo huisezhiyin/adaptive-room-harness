@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Local-first adaptive collaboration room harness for main-agent led work."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
 dependencies = [
   "pydantic>=2.7",
   "rich>=13.7",
@@ -32,4 +33,3 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-

@@ -1,43 +1,179 @@
 # Adaptive Room Harness
 
-Adaptive Room Harness is a local-first collaboration room for main-agent led work.
+Adaptive Room Harness is a local-first, Codex-oriented room for complex agent work.
 
-It lets a main agent open a task room, decide whether help is needed, attach participants such as agents, subagents, tools, workflows, memory systems, databases, and humans, then preserve the useful parts of the discussion as evidence, decisions, specs, reviews, cache, and reusable experience.
+It lets a main agent keep ownership of the task while waking a small discussion room when the work is complex, risky, or ambiguous. The room records the discussion, writes durable artifacts, and produces a concise `main_agent_reference.json` packet that the main agent can use as advisory input.
 
-Short version:
+This is an early public alpha: useful enough to run locally, intentionally small, and still rough around the edges.
 
-> A quiet room when the task is simple, an on-demand council when the task needs more minds or tools.
+## What Works Today
 
-## Core Idea
+- `room codex-ask` triages a task and wakes two Codex CLI participants when useful.
+- Same-capability participants use a deep collaboration chain by default: draft, review, revise, final check.
+- Simple tasks stay in the main Codex session.
+- Complex tasks create a room transcript, design notes, task notes, and `main_agent_reference.json`.
+- `room serve` opens a read-only local web observer for rooms, discussion turns, and artifacts.
+- Optional approval commands exist for stricter flows: `accept-plan`, `reject-plan`, and `execution-context`.
 
-```text
-Room = shared task context
-Participant = agent | subagent | tool | workflow | memory | database | human
-Mode = solo | triage | open council | pair programming | review board | SDD spec
-Artifact = evidence | decision | plan | risk list | review | spec | report
-Main Agent = final owner and default writer
+The main agent remains the writer, decider, and verifier. Other agents provide discussion and reference material.
+
+## Prerequisites
+
+- Python 3.11+
+- A working Codex CLI install for commands that wake Codex participants, such as `room codex-ask`, `room wake`, and `room play`
+- Codex CLI authentication already configured locally
+
+The test suite uses a fake Codex executable, so development checks do not require live Codex calls.
+
+## Install
+
+```bash
+git clone <repo-url>
+cd adaptive-room-harness
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
 ```
 
-This is not a fixed role-playing multi-agent demo. Researcher, Skeptic, and Reviewer are useful presets, but the core abstraction is an adaptive room with pluggable participants and explicit ownership.
+Check the CLI:
 
-## First Milestone
+```bash
+.venv/bin/room version
+```
 
-The first milestone is a CLI-only local MVP:
+## Quickstart
+
+Run the observer UI in one terminal:
+
+```bash
+.venv/bin/room serve --workspace . --port 8765
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+In another terminal, ask for help on a complex task:
+
+```bash
+.venv/bin/room codex-ask \
+  --workspace . \
+  --task "Design a risky architecture migration with rollback concerns."
+```
+
+For a complex task, the room wakes two Codex participants, records their discussion, and writes:
+
+```text
+.room/rooms/<room_id>/
+  transcript.jsonl
+  artifacts/
+    main_agent_reference.json
+    design.md
+    tasks.md
+    room_synthesis.json
+    approval_state.json
+    execution_plan.json
+```
+
+The normal alpha workflow is:
+
+```text
+main agent receives task
+  -> room codex-ask
+  -> simple task: continue solo
+  -> complex task: wake two Codex participants
+  -> agent A drafts, agent B reviews, agent A revises, agent B final-checks
+  -> room writes main_agent_reference.json
+  -> main agent reads the reference, decides, implements, verifies
+```
+
+## Core Commands
+
+```bash
+room ask --workspace <path> --task "<task>"
+room host-ask --workspace <path> --task "<task>"
+room codex-ask --workspace <path> --task "<task>"
+room reference-context --workspace <path> --room <room_id>
+room serve --workspace <path> --port 8765
+room wake --workspace <path> --task "<task>" --goal "<goal>"
+room play --workspace <path> --task "<task>" --rounds 1
+```
+
+The default collaboration pattern is `draft_review_revise`. Use `--collaboration-pattern parallel_opinion` when you intentionally want the older two-independent-opinions behavior.
+
+Manual room operations are also available:
 
 ```bash
 room init --workspace <path> --task "<task>"
-room triage --room <room_id>
-room attach --room <room_id> --kind agent --id claude_peer
-room say --room <room_id> --speaker codex_main --content "..."
-room add-evidence --room <room_id> --source file:...
-room decide --room <room_id> --decision "..." --why "..."
-room report --room <room_id>
+room triage --workspace <path> --room <room_id>
+room attach --workspace <path> --room <room_id> --kind agent --id reviewer
+room say --workspace <path> --room <room_id> --speaker codex_main --content "..."
+room add-evidence --workspace <path> --room <room_id> --source file:...
+room decide --workspace <path> --room <room_id> --decision "..." --why "..."
+room report --workspace <path> --room <room_id>
 ```
 
-The MVP should get the room data model right before building a daemon, web UI, or real multi-agent adapter orchestration.
+Optional approval flow:
 
-## Design Docs
+```bash
+room accept-plan --workspace <path> --room <room_id>
+room reject-plan --workspace <path> --room <room_id> --reason "..."
+room execution-context --workspace <path> --room <room_id>
+```
 
-- [Idea Doc v2](docs/IDEA_DOC_V2.md)
+## Observer UI
+
+`room serve` is read-only. It watches local room files and shows:
+
+- room list and status
+- recent discussion turns
+- `main_agent_reference.json`
+- design and task artifacts
+- synthesis, approval state, execution plan, and reports
+
+The first version uses browser polling. It does not stream partial tokens yet; completed agent turns appear as the room files update.
+
+## Codex CLI Notes
+
+The Codex adapter runs `codex exec` for each participant. By default it uses `gpt-5.4` for Codex CLI compatibility.
+
+Override the model with:
+
+```bash
+ROOM_CODEX_MODEL=<model> room codex-ask --workspace . --task "..."
+```
+
+or:
+
+```bash
+room codex-ask --workspace . --task "..." --model <model>
+```
+
+## Development
+
+```bash
+.venv/bin/python -m ruff check src tests
+.venv/bin/python -m pytest -q
+```
+
+The tests use a fake Codex executable, so they do not require network access or a real Codex CLI session.
+
+## Non-Goals
+
+- Not a general multi-agent platform.
+- Not an autonomous infinite loop.
+- Not a system where multiple agents write to the same workspace by default.
+- Not a replacement for the main agent's judgment.
+
+## Docs
+
+- [Quick Demo](docs/QUICK_DEMO.md)
 - [Technical Architecture](docs/TECHNICAL_ARCHITECTURE.md)
 - [Product Direction](docs/PRODUCT_DIRECTION.md)
+- [Usable Stage Roadmap](docs/USABLE_STAGE_ROADMAP.md)
+- [Idea Doc v2](docs/IDEA_DOC_V2.md)
+
+## License
+
+MIT

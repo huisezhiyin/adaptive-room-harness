@@ -34,6 +34,8 @@ The room should often decide not to activate anyone.
 
 Simple tasks should stay quiet and let the main agent proceed. Complex, risky, uncertain, or evidence-heavy tasks can wake selected participants.
 
+When participants have the same capability level, collaboration should be deep and peer-shaped rather than hierarchical. The default should look like draft, review, revise, and final check. Hierarchy only becomes the right abstraction when participants differ in model strength, cost, permissions, or tool access.
+
 ## Integration Principle
 
 Adaptive Room Harness governs live collaboration.
@@ -44,4 +46,3 @@ Other systems remain specialized:
 - SDD turns stable discussion into specs, checkpoints, and tasks.
 - MCP connects external tools and resources.
 - Host agents keep their native subagent and skill systems.
-
