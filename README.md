@@ -1,6 +1,6 @@
 # Adaptive Room Harness
 
-Adaptive Room Harness is a local-first multi-agent discussion room for Codex-style coding workflows.
+Adaptive Room Harness is a local-first multi-agent discussion room for coding-agent workflows.
 
 It lets a main agent keep ownership of the task while waking a small peer room when work is complex, risky, or ambiguous. The room records the agent discussion, writes durable artifacts, and produces a concise `main_agent_reference.json` packet that the main agent can use as advisory input.
 
@@ -8,7 +8,7 @@ This is an early public alpha: useful enough to run locally, intentionally small
 
 ## Keywords
 
-Codex CLI, agentic coding, multi-agent collaboration, local-first AI tools, agent room, peer review, advisory planning, developer workflow automation.
+coding agents, agentic coding, multi-agent collaboration, local-first AI tools, agent room, peer review, advisory planning, developer workflow automation, Codex CLI.
 
 ## Why This Exists
 
@@ -16,11 +16,13 @@ Most coding-agent work should stay simple: one main agent, one workspace, one cl
 
 Adaptive Room Harness is the small local harness for that middle ground. It does not try to become a general autonomous multi-agent platform. It gives the main agent a room it can wake when useful, then turns the discussion into artifacts the main agent can actually use.
 
+The current alpha ships with a Codex CLI adapter, but the room contract is intentionally broader: a host can route tasks, wake participants, persist discussion, and consume the reference packet without making Codex the only possible agent runtime.
+
 ## What Works Today
 
 - `room codex-ask` triages a task and wakes two Codex CLI participants when useful.
 - Same-capability participants use a deep collaboration chain by default: draft, review, revise, final check.
-- Simple tasks stay in the main Codex session.
+- Simple tasks stay in the main host or agent session.
 - Complex tasks create a room transcript, design notes, task notes, and `main_agent_reference.json`.
 - `room serve` opens a read-only local web observer for rooms, discussion turns, and artifacts.
 - Optional approval commands exist for stricter flows: `accept-plan`, `reject-plan`, and `execution-context`.
@@ -30,8 +32,8 @@ The main agent remains the writer, decider, and verifier. Other agents provide d
 ## Prerequisites
 
 - Python 3.11+
-- A working Codex CLI install for commands that wake Codex participants, such as `room codex-ask`, `room wake`, and `room play`
-- Codex CLI authentication already configured locally
+- A working Codex CLI install for the current built-in adapter commands that wake live participants, such as `room codex-ask`, `room wake`, and `room play`
+- Codex CLI authentication already configured locally when using that adapter
 
 The test suite uses a fake Codex executable, so development checks do not require live Codex calls.
 

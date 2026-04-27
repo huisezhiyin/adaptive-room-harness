@@ -5,11 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "adaptive-room-harness"
 version = "0.1.0"
-description = "Local-first multi-agent discussion room for Codex-style coding workflows."
+description = "Local-first multi-agent discussion room for coding-agent workflows."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 keywords = [
+  "agent-collaboration",
   "agentic-ai",
   "codex",
   "coding-agent",
