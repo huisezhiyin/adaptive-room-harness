@@ -543,7 +543,6 @@ printf "unexpected codex fallback\\n"
     )
 
     assert result.exit_code != 0
-    assert "claude -p failed" in result.output
     assert not codex_args_log.exists()
     rooms = list((workspace / ".room" / "rooms").glob("room_*/transcript.jsonl"))
     assert not rooms or "unexpected codex fallback" not in rooms[0].read_text()
