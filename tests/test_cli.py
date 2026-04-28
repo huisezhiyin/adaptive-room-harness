@@ -307,7 +307,12 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-printf "No blocking findings.\\nRecommendation: proceed after tests.\\nVerification: pytest -q.\\nNext: continue.\\n" > "$out"
+{
+  printf "No blocking findings.\\n"
+  printf "Recommendation: proceed after tests.\\n"
+  printf "Verification: pytest -q.\\n"
+  printf "Next: continue.\\n"
+} > "$out"
 """,
     )
     fake_codex.chmod(0o755)

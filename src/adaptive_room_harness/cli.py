@@ -32,8 +32,8 @@ from adaptive_room_harness.services import (
     room_snapshot,
     triage_room,
     wake_room,
-    write_wake_artifacts,
     write_artifact,
+    write_wake_artifacts,
 )
 from adaptive_room_harness.store import create_room, load_state, room_path
 
