@@ -12,6 +12,7 @@ from adaptive_room_harness.store import load_state, room_path
 
 ARTIFACT_NAMES = [
     "main_agent_reference.json",
+    "main_agent_brief.md",
     "host_decision.json",
     "room_synthesis.json",
     "approval_state.json",

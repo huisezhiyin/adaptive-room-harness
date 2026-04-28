@@ -170,6 +170,14 @@ Step instruction:
 Recent room transcript:
 {transcript_excerpt or "(No prior transcript.)"}
 
+Output contract:
+- Start with the concrete result for your collaboration step.
+- Include a `Recommendation:` line when you have a preferred path.
+- Include `Suggested steps:` and `Verification:` when implementation or review follow-up is useful.
+- Include `Risks:` for concrete failure modes, not generic caution.
+- For review/final-check steps, lead with blocking findings. If there are no blocking findings, say so explicitly before listing non-blocking risks.
+- Treat the main Codex session as owner, decider, implementer, and verifier. Your output is advisory only.
+
 Respond as `{agent_id}` only. Stay in your assigned collaboration step.
 
 Do not modify files. Do not ask the user for input. End with one short "Next:" line.
@@ -203,14 +211,21 @@ def run_codex_exec(
 
     with tempfile.NamedTemporaryFile("r+", encoding="utf-8") as output_file:
         command.extend(["--output-last-message", output_file.name, "-"])
-        completed = subprocess.run(
-            command,
-            input=prompt,
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                input=prompt,
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"codex executable not found: {executable}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"codex exec timed out after {timeout_seconds} seconds"
+            ) from exc
         output_file.seek(0)
         output = output_file.read().strip()
 
@@ -312,15 +327,22 @@ def run_claude_print(
         ]
     )
     try:
-        completed = subprocess.run(
-            command,
-            cwd=workspace,
-            env=build_claude_env(),
-            text=True,
-            capture_output=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=workspace,
+                env=build_claude_env(),
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"claude executable not found: {executable}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"claude -p timed out after {timeout_seconds} seconds"
+            ) from exc
     finally:
         if settings_path:
             Path(settings_path).unlink(missing_ok=True)

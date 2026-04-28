@@ -74,7 +74,7 @@ can_block = false
 capabilities = { debugging = 0.55, product = 0.7, review = 0.6, edge_cases = 0.75 }
 
 [profiles.final-review]
-description = "Claude Code reviews completed work before commit, push, release, or broad use; DeepSeek provides cheap outsider risk review."
+description = "Claude Code leads with concrete findings before commit, push, release, or broad use; DeepSeek provides cheap outsider risk, docs, and usability review."
 pattern = "parallel_opinion"
 rounds = 1
 
@@ -82,7 +82,7 @@ rounds = 1
 id = "claude_final_reviewer"
 runtime = "claude-cli"
 model = "sonnet"
-role = "final reviewer for bugs, missing tests, regressions, and release risk"
+role = "final reviewer who reports blocking findings first, then missing tests, regressions, and release risk"
 authority = "reviewer"
 weight = 0.9
 can_block = true

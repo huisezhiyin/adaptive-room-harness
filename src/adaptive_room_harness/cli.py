@@ -23,6 +23,7 @@ from adaptive_room_harness.services import (
     list_room_summaries,
     load_approval_state,
     load_main_agent_reference,
+    next_cycle_id,
     play_codex_agents,
     record_decision,
     record_evidence,
@@ -31,6 +32,7 @@ from adaptive_room_harness.services import (
     room_snapshot,
     triage_room,
     wake_room,
+    write_wake_artifacts,
     write_artifact,
 )
 from adaptive_room_harness.store import create_room, load_state, room_path
@@ -950,11 +952,23 @@ def play(
             anthropic_max_tokens=anthropic_max_tokens,
         )
     except (RuntimeError, ValueError) as exc:
-        raise typer.BadParameter(str(exc)) from exc
+        raise typer.BadParameter(
+            "agent runtime failed; requested runtimes are authoritative and no fallback "
+            f"was attempted: {exc}"
+        ) from exc
 
+    cycle_id = next_cycle_id(state)
+    cycle_path = room_path(Path(state.workspace), state.room_id) / "cycles" / cycle_id
+    cycle_path.mkdir(parents=True, exist_ok=True)
+    goal = task or state.task
+    artifacts = write_wake_artifacts(state, cycle_id=cycle_id, goal=goal, turns=turns)
+    generate_report(state)
     console.print(f"played {len(turns)} agent turns in {state.room_id}")
+    console.print(f"cycle: {cycle_id}")
     report_path = room_path(Path(state.workspace), state.room_id) / "reports" / "final.md"
     console.print(f"report: {report_path}")
+    console.print(f"reference: {artifacts['main_agent_reference.json']}")
+    console.print(f"brief: {artifacts['main_agent_brief.md']}")
 
 
 @app.command()

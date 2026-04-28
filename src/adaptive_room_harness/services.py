@@ -833,6 +833,7 @@ Collaboration pattern: {state.collaboration_pattern}
         "design.md": artifact_dir / "design.md",
         "tasks.md": artifact_dir / "tasks.md",
         "main_agent_reference.json": artifact_dir / "main_agent_reference.json",
+        "main_agent_brief.md": artifact_dir / "main_agent_brief.md",
         "room_synthesis.json": artifact_dir / "room_synthesis.json",
         "approval_state.json": artifact_dir / "approval_state.json",
         "wake_checkpoint.json": artifact_dir / "wake_checkpoint.json",
@@ -841,6 +842,7 @@ Collaboration pattern: {state.collaboration_pattern}
         f"{cycle_id}/design.md": cycle_path / "design.md",
         f"{cycle_id}/tasks.md": cycle_path / "tasks.md",
         f"{cycle_id}/main_agent_reference.json": cycle_path / "main_agent_reference.json",
+        f"{cycle_id}/main_agent_brief.md": cycle_path / "main_agent_brief.md",
         f"{cycle_id}/room_synthesis.json": cycle_path / "room_synthesis.json",
         f"{cycle_id}/approval_state.json": cycle_path / "approval_state.json",
         f"{cycle_id}/wake_checkpoint.json": cycle_path / "wake_checkpoint.json",
@@ -872,14 +874,17 @@ Collaboration pattern: {state.collaboration_pattern}
         cycle_id=cycle_id,
         goal=goal,
         artifact_paths=paths,
+        turns=turns,
         synthesis=synthesis,
         execution_plan=execution_plan,
     )
     approval_state = build_approval_state(state, synthesis)
+    main_agent_brief = render_main_agent_brief(main_agent_reference)
     paths["room_summary.md"].write_text(summary)
     paths["design.md"].write_text(design)
     paths["tasks.md"].write_text(tasks)
     dump_json(paths["main_agent_reference.json"], main_agent_reference)
+    paths["main_agent_brief.md"].write_text(main_agent_brief)
     dump_json(paths["room_synthesis.json"], synthesis)
     dump_json(paths["approval_state.json"], approval_state)
     dump_json(paths["wake_checkpoint.json"], checkpoint)
@@ -888,6 +893,7 @@ Collaboration pattern: {state.collaboration_pattern}
     paths[f"{cycle_id}/design.md"].write_text(design)
     paths[f"{cycle_id}/tasks.md"].write_text(tasks)
     dump_json(paths[f"{cycle_id}/main_agent_reference.json"], main_agent_reference)
+    paths[f"{cycle_id}/main_agent_brief.md"].write_text(main_agent_brief)
     dump_json(paths[f"{cycle_id}/room_synthesis.json"], synthesis)
     dump_json(paths[f"{cycle_id}/approval_state.json"], approval_state)
     dump_json(paths[f"{cycle_id}/wake_checkpoint.json"], checkpoint)
@@ -1058,9 +1064,23 @@ def build_main_agent_reference(
     cycle_id: str,
     goal: str,
     artifact_paths: dict[str, Path],
+    turns: list[TranscriptTurn],
     synthesis: RoomSynthesis,
     execution_plan: WakeExecutionPlan,
 ) -> MainAgentReference:
+    discussion_text = "\n\n".join(turn.content.strip() for turn in turns if turn.content.strip())
+    top_findings = extract_review_findings(discussion_text)
+    blocking_findings = [
+        item
+        for item in top_findings
+        if is_blocking_finding(item)
+    ]
+    verification_gaps = extract_verification_gaps(discussion_text)
+    outcome = derive_reference_outcome(
+        has_turns=bool(turns),
+        top_findings=top_findings,
+        blocking_findings=blocking_findings,
+    )
     suggested_steps = [f"{task.id}: {task.title}" for task in synthesis.tasks]
     if not suggested_steps:
         suggested_steps = [f"{task.id}: {task.title}" for task in execution_plan.tasks]
@@ -1087,7 +1107,12 @@ def build_main_agent_reference(
         source_cycle=cycle_id,
         task=state.task,
         objective=goal,
+        outcome=outcome,
         confidence="medium",
+        operator_summary=derive_operator_summary(outcome, synthesis.recommended_path),
+        top_findings=top_findings,
+        blocking_findings=blocking_findings,
+        verification_gaps=verification_gaps,
         recommended_focus=synthesis.recommended_path,
         key_points=[
             f"Collaboration pattern: {state.collaboration_pattern}",
@@ -1287,27 +1312,31 @@ def build_synthesis_tasks(
     rule_items: list[str],
     acceptance_items: list[str],
 ) -> list[SynthesisTask]:
+    actionable_items = dedupe_preserve_order(schema_items + rule_items + acceptance_items)
     tasks = [
         SynthesisTask(
             id="task_001",
-            title="Define the structured proposal schema",
-            acceptance=schema_items[:6] or ["The schema fields are explicit and documented."],
+            title="Extract the useful room recommendations",
+            acceptance=actionable_items[:6]
+            or ["The main agent has identified which room recommendations are useful."],
             risk="medium",
         ),
         SynthesisTask(
             id="task_002",
-            title="Implement the lifecycle and validation rules",
-            acceptance=rule_items[:6]
-            or ["The command validates state transitions before writing artifacts."],
+            title="Apply selected changes with main-agent judgment",
+            acceptance=[
+                "Accepted recommendations are mapped to explicit workspace changes.",
+                "Weak or irrelevant room suggestions are not applied blindly.",
+            ],
             risk="medium",
         ),
         SynthesisTask(
             id="task_003",
-            title="Verify accepted behavior and downstream readability",
+            title="Verify the accepted changes",
             acceptance=acceptance_items[:6]
             or [
-                "Relevant checks pass or failures are captured.",
-                "A downstream reader can reconstruct the result from room artifacts.",
+                "Relevant checks pass, or failures are recorded with the next diagnostic step.",
+                "The final response names what room advice was used and what was ignored.",
             ],
             risk="medium",
         ),
@@ -1329,6 +1358,150 @@ def truncate_text(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars].rstrip() + "..."
+
+
+def extract_review_findings(text: str) -> list[str]:
+    findings: list[str] = []
+    for line in text.splitlines():
+        cleaned = line.strip("-*` ").strip()
+        if not cleaned:
+            continue
+        lower = cleaned.lower()
+        if any(
+            phrase in lower
+            for phrase in [
+                "no blocking finding",
+                "no blocking findings",
+                "no blocker",
+                "no blockers",
+            ]
+        ):
+            continue
+        if any(
+            token in lower
+            for token in [
+                "finding",
+                "blocker",
+                "blocking",
+                "bug",
+                "regression",
+                "missing test",
+                "ship",
+                "must fix",
+                "p0",
+                "p1",
+                "p2",
+            ]
+        ):
+            findings.append(truncate_text(cleaned, 240))
+    return dedupe_preserve_order(findings)[:6]
+
+
+def is_blocking_finding(item: str) -> bool:
+    lower = item.lower()
+    if any(
+        phrase in lower
+        for phrase in [
+            "no blocking finding",
+            "no blocking findings",
+            "no blocker",
+            "no blockers",
+        ]
+    ):
+        return False
+    return any(token in lower for token in ["block", "blocking", "p0", "p1", "must fix"])
+
+
+def extract_verification_gaps(text: str) -> list[str]:
+    gaps: list[str] = []
+    for line in text.splitlines():
+        cleaned = line.strip("-*` ").strip()
+        lower = cleaned.lower()
+        if any(token in lower for token in ["verification", "missing check", "test gap"]):
+            gaps.append(truncate_text(cleaned, 240))
+    return dedupe_preserve_order(gaps)[:6]
+
+
+def derive_reference_outcome(
+    *,
+    has_turns: bool,
+    top_findings: list[str],
+    blocking_findings: list[str],
+) -> str:
+    if not has_turns:
+        return "partial"
+    if blocking_findings:
+        return "block"
+    if top_findings:
+        return "warn"
+    return "pass"
+
+
+def derive_operator_summary(outcome: str, recommended_focus: str) -> str:
+    if outcome == "block":
+        prefix = "Do not treat this as ready; address blocking findings first."
+    elif outcome == "warn":
+        prefix = "Proceed only after reviewing the non-blocking findings and gaps."
+    elif outcome == "pass":
+        prefix = "No concrete blockers were extracted; verify normally before finishing."
+    elif outcome == "partial":
+        prefix = "Room output was incomplete; inspect transcript before relying on it."
+    else:
+        prefix = "Room output indicates an error; fix the room run before relying on artifacts."
+    return f"{prefix} Focus: {truncate_text(recommended_focus, 260)}"
+
+
+def render_main_agent_brief(reference: MainAgentReference) -> str:
+    lines = [
+        "# Main Agent Brief",
+        "",
+        f"- Room: `{reference.room_id}`",
+        f"- Source cycle: `{reference.source_cycle}`",
+        f"- Advisory only: `{str(reference.advisory_only).lower()}`",
+        f"- Outcome: `{reference.outcome}`",
+        f"- Confidence: `{reference.confidence}`",
+        f"- Operator summary: {reference.operator_summary or 'None.'}",
+        "",
+        "## Recommended Focus",
+        "",
+        reference.recommended_focus or "Review the room transcript before acting.",
+        "",
+        "## Key Points",
+        "",
+        *render_markdown_bullets(reference.key_points),
+        "",
+        "## Top Findings",
+        "",
+        *render_markdown_bullets(reference.top_findings),
+        "",
+        "## Blocking Findings",
+        "",
+        *render_markdown_bullets(reference.blocking_findings),
+        "",
+        "## Suggested Steps",
+        "",
+        *render_markdown_bullets(reference.suggested_steps),
+        "",
+        "## Risks",
+        "",
+        *render_markdown_bullets(reference.risks),
+        "",
+        "## Verification",
+        "",
+        *render_markdown_bullets(reference.verification),
+        "",
+        "## Verification Gaps",
+        "",
+        *render_markdown_bullets(reference.verification_gaps),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_markdown_bullets(items: list[str]) -> list[str]:
+    if not items:
+        return ["- None."]
+    return [f"- {item}" for item in items]
 
 
 def triage_room(state: RoomState, task_text: str | None = None) -> TriageResult:
@@ -1539,6 +1712,8 @@ def generate_report(state: RoomState) -> str:
                 f"- Reference: `{reference.reference_id}`",
                 f"- Source cycle: `{reference.source_cycle}`",
                 f"- Advisory only: `{str(reference.advisory_only).lower()}`",
+                f"- Outcome: `{reference.outcome}`",
+                f"- Operator summary: {reference.operator_summary or 'None.'}",
                 f"- Recommended focus: {reference.recommended_focus}",
             ]
         )

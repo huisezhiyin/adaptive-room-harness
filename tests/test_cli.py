@@ -221,6 +221,9 @@ printf "fake response from %s\\nNext: continue.\\n" "$agent" > "$out"
 
     assert result.exit_code == 0
     assert "played 4 agent turns" in result.stdout
+    assert "cycle: cycle_001" in result.stdout
+    assert "reference:" in result.stdout
+    assert "brief:" in result.stdout
     room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
     room_path = workspace / ".room" / "rooms" / room_id
     transcript = (room_path / "transcript.jsonl").read_text()
@@ -234,6 +237,13 @@ printf "fake response from %s\\nNext: continue.\\n" "$agent" > "$out"
     assert "AGENT_REVISE" in transcript
     assert "AGENT_FINAL_CHECK" in transcript
     assert "fake response from codex_agent_a" in (room_path / "reports" / "final.md").read_text()
+    reference = json.loads((room_path / "artifacts" / "main_agent_reference.json").read_text())
+    assert reference["schema_version"] == 2
+    assert reference["outcome"] in {"pass", "warn", "block", "partial"}
+    assert reference["operator_summary"]
+    assert (room_path / "artifacts" / "main_agent_brief.md").exists()
+    assert "Main Agent Brief" in (room_path / "artifacts" / "main_agent_brief.md").read_text()
+    assert (room_path / "cycles" / "cycle_001" / "main_agent_brief.md").exists()
     assert "--model gpt-5.4" in args_log.read_text()
 
 
@@ -282,6 +292,49 @@ printf "parallel response from %s at %s\\nNext: continue.\\n" "$agent" "$step" >
     assert state["collaboration_pattern"] == "parallel_opinion"
     assert "parallel response from codex_agent_a at opinion" in transcript
     assert "parallel response from codex_agent_b at opinion" in transcript
+
+
+def test_main_agent_reference_does_not_treat_no_blockers_as_blocking(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+printf "No blocking findings.\\nRecommendation: proceed after tests.\\nVerification: pytest -q.\\nNext: continue.\\n" > "$out"
+""",
+    )
+    fake_codex.chmod(0o755)
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Final review with no blockers.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--codex-bin",
+            str(fake_codex),
+        ],
+    )
+
+    assert result.exit_code == 0
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    reference = json.loads(
+        (workspace / ".room" / "rooms" / room_id / "artifacts" / "main_agent_reference.json")
+        .read_text()
+    )
+    assert reference["outcome"] == "pass"
+    assert reference["blocking_findings"] == []
 
 
 def test_play_runs_anthropic_api_runtime_without_logging_key(tmp_path, monkeypatch) -> None:
@@ -546,6 +599,32 @@ printf "unexpected codex fallback\\n"
     assert not codex_args_log.exists()
     rooms = list((workspace / ".room" / "rooms").glob("room_*/transcript.jsonl"))
     assert not rooms or "unexpected codex fallback" not in rooms[0].read_text()
+
+
+def test_play_reports_missing_runtime_without_traceback(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Report missing runtime cleanly.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--runtime",
+            "codex-cli",
+            "--codex-bin",
+            str(tmp_path / "missing-codex"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "requested runtimes are authoritative" in result.output
+    assert "codex executable not found" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_play_supports_mixed_participant_runtimes(tmp_path) -> None:
@@ -867,6 +946,7 @@ printf "wake response from %s\\nNext: capture tasks.\\n" "$agent" > "$out"
         room_path / "artifacts" / "design.md"
     ).read_text()
     assert "pass/fail checks" in (room_path / "artifacts" / "tasks.md").read_text()
+    assert "Main Agent Brief" in (room_path / "artifacts" / "main_agent_brief.md").read_text()
     checkpoint = (room_path / "artifacts" / "wake_checkpoint.json").read_text()
     assert '"resume_status": "authoritative"' in checkpoint
     assert '"source_cycle": "cycle_001"' in checkpoint
@@ -878,6 +958,8 @@ printf "wake response from %s\\nNext: capture tasks.\\n" "$agent" > "$out"
     reference = json.loads((room_path / "artifacts" / "main_agent_reference.json").read_text())
     assert reference["source_cycle"] == "cycle_001"
     assert reference["advisory_only"] is True
+    assert reference["outcome"] in {"pass", "warn", "block", "partial"}
+    assert reference["operator_summary"]
     assert reference["recommended_focus"]
     assert (room_path / "cycles" / "cycle_001" / "main_agent_reference.json").exists()
     synthesis = json.loads((room_path / "artifacts" / "room_synthesis.json").read_text())
@@ -956,6 +1038,7 @@ printf "observer response from %s\\nRecommendation: show the room live.\\n" "$ag
     transcript = "\n".join(turn["content"] for turn in payload["recent_transcript"])
     assert "observer response from codex_agent_a" in transcript
     assert "main_agent_reference.json" in artifacts
+    assert "main_agent_brief.md" in artifacts
     assert artifacts["main_agent_reference.json"]["content"]["advisory_only"] is True
     assert "design.md" in artifacts
 

@@ -26,7 +26,7 @@ The current alpha ships with Codex CLI, Claude Code CLI, and Anthropic-compatibl
 - `room codex-ask` is a Codex-oriented convenience wrapper for local Codex workflows.
 - Same-capability participants use a deep collaboration chain by default: draft, review, revise, final check.
 - Simple tasks stay in the main host or agent session.
-- Complex tasks create a room transcript, design notes, task notes, and `main_agent_reference.json`.
+- Complex tasks create a room transcript, design notes, task notes, `main_agent_reference.json`, and a readable `main_agent_brief.md`.
 - `room serve` opens a read-only local web observer for rooms, discussion turns, and artifacts.
 - Optional approval commands exist for stricter flows: `accept-plan`, `reject-plan`, and `execution-context`.
 
@@ -93,6 +93,7 @@ For a complex task, the room wakes the configured participants, records their di
   transcript.jsonl
   artifacts/
     main_agent_reference.json
+    main_agent_brief.md
     design.md
     tasks.md
     room_synthesis.json
@@ -155,6 +156,7 @@ room execution-context --workspace <path> --room <room_id>
 - room list and status
 - recent discussion turns
 - `main_agent_reference.json`
+- `main_agent_brief.md`
 - design and task artifacts
 - synthesis, approval state, execution plan, and reports
 

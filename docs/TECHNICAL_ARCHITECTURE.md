@@ -288,7 +288,12 @@ source_cycle
 task
 objective
 advisory_only
+outcome
 confidence
+operator_summary
+top_findings
+blocking_findings
+verification_gaps
 recommended_focus
 key_points
 suggested_steps
@@ -297,6 +302,10 @@ verification
 artifact_pointers
 written_at
 ```
+
+`main_agent_brief.md` is the readable twin of the JSON packet. It is optimized for a host agent
+or human operator who wants the outcome, operator summary, findings, risks, and verification gaps
+without replaying the full transcript.
 
 `room reference-context` prints this artifact for a host or main agent. `room codex-ask` includes it directly in the JSON response, and for the normal complex-task path returns `codex_workflow.codex_action = execute_with_room_reference`.
 

@@ -30,6 +30,7 @@ RecommendedAction = Literal["implement", "ask_user", "research_more", "review_on
 HostNextStep = Literal["continue_solo", "ask_user", "execute", "wake_again", "review_only"]
 ApprovalStatus = Literal["not_required", "pending", "accepted", "rejected", "superseded"]
 ReferenceConfidence = Literal["low", "medium", "high"]
+ReferenceOutcome = Literal["pass", "warn", "block", "error", "partial"]
 CollaborationPattern = Literal["parallel_opinion", "draft_review_revise", "mixed_runtime_review"]
 
 
@@ -201,14 +202,19 @@ class ExecutionContext(BaseModel):
 
 
 class MainAgentReference(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     room_id: str
     reference_id: str
     source_cycle: str
     task: str
     objective: str
     advisory_only: bool = True
+    outcome: ReferenceOutcome = "warn"
     confidence: ReferenceConfidence = "medium"
+    operator_summary: str | None = None
+    top_findings: list[str] = Field(default_factory=list)
+    blocking_findings: list[str] = Field(default_factory=list)
+    verification_gaps: list[str] = Field(default_factory=list)
     recommended_focus: str
     key_points: list[str] = Field(default_factory=list)
     suggested_steps: list[str] = Field(default_factory=list)
