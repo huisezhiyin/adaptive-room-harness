@@ -2,10 +2,13 @@ import json
 import types
 from http.server import ThreadingHTTPServer
 from threading import Thread
+from time import monotonic, sleep
 from urllib.request import urlopen
 
 from typer.testing import CliRunner
 
+import adaptive_room_harness.services as services
+from adaptive_room_harness.agents import CodexExecResult
 from adaptive_room_harness.cli import app
 from adaptive_room_harness.profiles import load_room_profile
 from adaptive_room_harness.server import build_room_payload, make_handler
@@ -342,6 +345,102 @@ done
     assert reference["blocking_findings"] == []
 
 
+def test_main_agent_reference_does_not_treat_non_blocking_as_blocking(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+{
+  printf "Non-blocking concerns from the diff:\\n"
+  printf "Finding: documentation can be clearer.\\n"
+  printf "Recommendation: proceed after docs update.\\n"
+  printf "Next: continue.\\n"
+} > "$out"
+""",
+    )
+    fake_codex.chmod(0o755)
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Final review with non-blocking concerns.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--codex-bin",
+            str(fake_codex),
+        ],
+    )
+
+    assert result.exit_code == 0
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    reference = json.loads(
+        (workspace / ".room" / "rooms" / room_id / "artifacts" / "main_agent_reference.json")
+        .read_text()
+    )
+    assert reference["outcome"] == "warn"
+    assert reference["blocking_findings"] == []
+
+
+def test_main_agent_reference_does_not_treat_unless_blocking_as_blocking(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+{
+  printf "Prevent advisors from blocking unless Codex escalates a cited issue.\\n"
+  printf "Finding: advisory role labels need to stay visible.\\n"
+  printf "Recommendation: proceed after preserving owner semantics.\\n"
+  printf "Next: continue.\\n"
+} > "$out"
+""",
+    )
+    fake_codex.chmod(0o755)
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Final review with unless blocking phrasing.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--codex-bin",
+            str(fake_codex),
+        ],
+    )
+
+    assert result.exit_code == 0
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    reference = json.loads(
+        (workspace / ".room" / "rooms" / room_id / "artifacts" / "main_agent_reference.json")
+        .read_text()
+    )
+    assert reference["outcome"] == "warn"
+    assert reference["blocking_findings"] == []
+
+
 def test_play_runs_anthropic_api_runtime_without_logging_key(tmp_path, monkeypatch) -> None:
     workspace = tmp_path / "workspace"
     calls: list[dict[str, object]] = []
@@ -394,6 +493,139 @@ def test_play_runs_anthropic_api_runtime_without_logging_key(tmp_path, monkeypat
     assert calls[0]["client"]["api_key"] == "secret-value-that-must-not-be-written"
     assert calls[0]["client"]["base_url"] == "https://api.deepseek.com/anthropic"
     assert calls[1]["model"] == "deepseek-v4-pro"
+
+
+def test_play_runs_openai_api_runtime_without_logging_key(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    calls: list[dict[str, object]] = []
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            message = types.SimpleNamespace(content="qwen response\nNext: continue.")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class FakeChat:
+        def __init__(self):
+            self.completions = FakeChatCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            calls.append({"client": kwargs})
+            self.chat = FakeChat()
+
+    monkeypatch.setenv("FAKE_QWEN_KEY", "qwen-secret-that-must-not-be-written")
+    monkeypatch.setenv("ROOM_OPENAI_API_KEY_ENV", "FAKE_QWEN_KEY")
+    monkeypatch.setenv(
+        "ROOM_OPENAI_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "openai",
+        types.SimpleNamespace(OpenAI=FakeOpenAI),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Let two Qwen participants discuss the MVP shape.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--runtime",
+            "openai-api",
+            "--model",
+            "qwen-plus",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "played 2 agent turns" in result.stdout
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    room_path = workspace / ".room" / "rooms" / room_id
+    transcript = (room_path / "transcript.jsonl").read_text()
+    assert "qwen response" in transcript
+    assert "qwen-secret-that-must-not-be-written" not in transcript
+    assert calls[0]["client"]["api_key"] == "qwen-secret-that-must-not-be-written"
+    assert calls[0]["client"]["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert calls[1]["model"] == "qwen-plus"
+
+
+def test_openai_runtime_accepts_qwen_api_key_alias(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    calls: list[dict[str, object]] = []
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            message = types.SimpleNamespace(content="qwen alias response")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            calls.append({"client": kwargs})
+            self.chat = types.SimpleNamespace(completions=FakeChatCompletions())
+
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.delenv("ROOM_OPENAI_API_KEY_ENV", raising=False)
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-alias-secret")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "openai",
+        types.SimpleNamespace(OpenAI=FakeOpenAI),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Use QWEN_API_KEY alias.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--runtime",
+            "openai-api",
+        ],
+    )
+
+    assert result.exit_code == 0
+    transcript = next((workspace / ".room" / "rooms").glob("room_*/transcript.jsonl")).read_text()
+    assert "qwen alias response" in transcript
+    assert "qwen-alias-secret" not in transcript
+    assert calls[0]["client"]["api_key"] == "qwen-alias-secret"
+
+
+def test_openai_runtime_missing_key_is_clear(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.delenv("QWEN_API_KEY", raising=False)
+    monkeypatch.setenv("ROOM_OPENAI_API_KEY_ENV", "MISSING_QWEN_API_KEY")
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Missing Qwen key.",
+            "--collaboration-pattern",
+            "parallel_opinion",
+            "--runtime",
+            "openai-api",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "requested runtimes are authoritative" in result.output
+    assert "MISSING_QWEN_API_KEY is not set" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_play_loads_workspace_env_for_anthropic_runtime(tmp_path, monkeypatch) -> None:
@@ -874,6 +1106,488 @@ printf "profile codex response\\nNext: continue.\\n" > "$out"
     assert calls[1]["model"] == "deepseek-profile"
 
 
+def test_non_blocking_profile_participant_failure_does_not_fail_room(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    fake_codex = tmp_path / "codex"
+    clients: list[dict[str, object]] = []
+    workspace.joinpath(".room-profiles.toml").write_text(
+        f"""
+[profiles.advisory-mixed]
+description = "Test non-blocking failure"
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.advisory-mixed.participants]]
+id = "codex_planner"
+runtime = "codex-cli"
+role = "primary planner"
+can_block = true
+bin = "{fake_codex}"
+
+[[profiles.advisory-mixed.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+role = "non-blocking advisor"
+can_block = false
+""",
+    )
+    fake_codex.write_text(
+        """#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+printf "primary response\\nRecommendation: continue.\\nNext: continue.\\n" > "$out"
+""",
+    )
+    fake_codex.chmod(0o755)
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            raise RuntimeError("provider failed with nonblocking-secret-value")
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            clients.append(kwargs)
+            self.messages = FakeMessages()
+
+    monkeypatch.setenv("FAKE_DEEPSEEK_KEY", "nonblocking-secret-value")
+    monkeypatch.setenv("ROOM_ADVISOR_TIMEOUT_SECONDS", "7")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Advisor failure should not block.",
+            "--profile",
+            "advisory-mixed",
+            "--anthropic-api-key-env",
+            "FAKE_DEEPSEEK_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "played 2 agent turns" in result.stdout
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    transcript = (workspace / ".room" / "rooms" / room_id / "transcript.jsonl").read_text()
+    assert "primary response" in transcript
+    assert "Non-blocking advisor `deepseek_advisor` did not complete" in transcript
+    assert "nonblocking-secret-value" not in transcript
+    assert "[redacted]" in transcript
+    assert clients[0]["timeout"] == 7
+
+
+def test_non_blocking_profile_participant_uses_full_timeout_without_cap(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    fake_codex = tmp_path / "codex"
+    clients: list[dict[str, object]] = []
+    workspace.joinpath(".room-profiles.toml").write_text(
+        f"""
+[profiles.advisory-mixed]
+description = "Test explicit room timeout"
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.advisory-mixed.participants]]
+id = "codex_planner"
+runtime = "codex-cli"
+role = "primary planner"
+can_block = true
+bin = "{fake_codex}"
+
+[[profiles.advisory-mixed.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+role = "non-blocking advisor"
+can_block = false
+""",
+    )
+    fake_codex.write_text(
+        """#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+printf "primary response\\nRecommendation: continue.\\nNext: continue.\\n" > "$out"
+""",
+    )
+    fake_codex.chmod(0o755)
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(content=[types.SimpleNamespace(text="advisor response")])
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            clients.append(kwargs)
+            self.messages = FakeMessages()
+
+    monkeypatch.delenv("ROOM_ADVISOR_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("FAKE_DEEPSEEK_KEY", "nonblocking-secret-value")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Explicit room should use full timeout.",
+            "--profile",
+            "advisory-mixed",
+            "--timeout-seconds",
+            "123",
+            "--anthropic-api-key-env",
+            "FAKE_DEEPSEEK_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert clients[0]["timeout"] == 123
+
+
+def test_play_profile_supports_three_participants(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    fake_codex = tmp_path / "codex"
+    codex_args_log = tmp_path / "codex-args.log"
+    anthropic_calls: list[dict[str, object]] = []
+    openai_calls: list[dict[str, object]] = []
+    workspace.joinpath(".room-profiles.toml").write_text(
+        f"""
+[profiles.advisory-trio]
+description = "Test trio profile"
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.advisory-trio.participants]]
+id = "codex_planner"
+runtime = "codex-cli"
+model = "gpt-profile"
+role = "primary planner"
+authority = "primary"
+weight = 1.0
+can_block = true
+bin = "{fake_codex}"
+capabilities = {{ coding = 0.95 }}
+
+[[profiles.advisory-trio.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+model = "deepseek-profile"
+role = "secondary advisor"
+authority = "advisory"
+weight = 0.55
+can_block = false
+api_base_url = "https://profile.test/anthropic"
+capabilities = {{ review = 0.65 }}
+
+[[profiles.advisory-trio.participants]]
+id = "qwen_advisor"
+runtime = "openai-api"
+model = "qwen-profile"
+role = "tertiary advisor"
+authority = "advisory"
+weight = 0.35
+can_block = false
+api_base_url = "https://profile.test/openai"
+capabilities = {{ product = 0.65 }}
+""",
+    )
+    fake_codex.write_text(
+        f"""#!/bin/sh
+printf "%s\\n" "$*" >> "{codex_args_log}"
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+prompt=$(cat)
+printf "%s" "$prompt" > "{tmp_path / "trio-codex-prompt.txt"}"
+printf "trio codex response\\nNext: continue.\\n" > "$out"
+""",
+    )
+    fake_codex.chmod(0o755)
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            anthropic_calls.append(kwargs)
+            return types.SimpleNamespace(content=[types.SimpleNamespace(text="trio api response")])
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            anthropic_calls.append({"client": kwargs})
+            self.messages = FakeMessages()
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):
+            openai_calls.append(kwargs)
+            message = types.SimpleNamespace(content="trio qwen response")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            openai_calls.append({"client": kwargs})
+            self.chat = types.SimpleNamespace(completions=FakeChatCompletions())
+
+    monkeypatch.setenv("FAKE_DEEPSEEK_KEY", "deepseek-secret-that-must-not-be-written")
+    monkeypatch.setenv("FAKE_QWEN_KEY", "qwen-secret-that-must-not-be-written")
+    monkeypatch.setenv("ROOM_OPENAI_API_KEY_ENV", "FAKE_QWEN_KEY")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "openai",
+        types.SimpleNamespace(OpenAI=FakeOpenAI),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Use a trio room profile.",
+            "--profile",
+            "advisory-trio",
+            "--anthropic-api-key-env",
+            "FAKE_DEEPSEEK_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "played 3 agent turns" in result.stdout
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    transcript = (workspace / ".room" / "rooms" / room_id / "transcript.jsonl").read_text()
+    participants = (workspace / ".room" / "rooms" / room_id / "participants.json").read_text()
+    assert "codex_planner" in participants
+    assert "deepseek_advisor" in participants
+    assert "qwen_advisor" in participants
+    assert "trio codex response" in transcript
+    assert "trio api response" in transcript
+    assert "trio qwen response" in transcript
+    assert "deepseek-secret-that-must-not-be-written" not in transcript
+    assert "qwen-secret-that-must-not-be-written" not in transcript
+    assert "--model gpt-profile" in codex_args_log.read_text()
+    codex_prompt = (tmp_path / "trio-codex-prompt.txt").read_text()
+    assert "deepseek_advisor" in codex_prompt
+    assert "qwen_advisor" in codex_prompt
+    assert anthropic_calls[0]["client"]["base_url"] == "https://profile.test/anthropic"
+    assert anthropic_calls[1]["model"] == "deepseek-profile"
+    assert openai_calls[0]["client"]["base_url"] == "https://profile.test/openai"
+    assert openai_calls[1]["model"] == "qwen-profile"
+    qwen_prompt = openai_calls[1]["messages"][1]["content"]
+    assert "deepseek_advisor" in qwen_prompt
+    assert "trio api response" not in qwen_prompt
+
+
+def test_parallel_opinion_runs_participants_concurrently(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    fake_codex = tmp_path / "codex"
+    workspace.joinpath(".room-profiles.toml").write_text(
+        f"""
+[profiles.concurrent-trio]
+description = "Concurrent trio"
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.concurrent-trio.participants]]
+id = "codex_planner"
+runtime = "codex-cli"
+role = "planner"
+bin = "{fake_codex}"
+
+[[profiles.concurrent-trio.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+role = "advisor"
+
+[[profiles.concurrent-trio.participants]]
+id = "qwen_advisor"
+runtime = "openai-api"
+role = "advisor"
+""",
+    )
+    fake_codex.write_text(
+        """#!/bin/sh
+sleep 0.3
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+printf "concurrent codex response\\nNext: continue.\\n" > "$out"
+""",
+    )
+    fake_codex.chmod(0o755)
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            sleep(0.3)
+            return types.SimpleNamespace(content=[types.SimpleNamespace(text="concurrent api")])
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            self.messages = FakeMessages()
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):
+            sleep(0.3)
+            message = types.SimpleNamespace(content="concurrent qwen")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = types.SimpleNamespace(completions=FakeChatCompletions())
+
+    monkeypatch.setenv("FAKE_DEEPSEEK_KEY", "deepseek-secret")
+    monkeypatch.setenv("FAKE_QWEN_KEY", "qwen-secret")
+    monkeypatch.setenv("ROOM_OPENAI_API_KEY_ENV", "FAKE_QWEN_KEY")
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "openai",
+        types.SimpleNamespace(OpenAI=FakeOpenAI),
+    )
+
+    started = monotonic()
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Run concurrent trio.",
+            "--profile",
+            "concurrent-trio",
+            "--anthropic-api-key-env",
+            "FAKE_DEEPSEEK_KEY",
+        ],
+    )
+    elapsed = monotonic() - started
+
+    assert result.exit_code == 0
+    assert "played 3 agent turns" in result.stdout
+    assert elapsed < 1.0
+
+
+def test_deliberation_pattern_forces_multi_phase_discussion(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls: list[dict[str, str]] = []
+    workspace.joinpath(".room-profiles.toml").write_text(
+        """
+[profiles.quick-deliberation]
+description = "Quick discussion"
+pattern = "deliberation"
+rounds = 1
+
+[[profiles.quick-deliberation.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+role = "advisor"
+can_block = false
+
+[[profiles.quick-deliberation.participants]]
+id = "qwen_advisor"
+runtime = "openai-api"
+role = "advisor"
+can_block = false
+""",
+    )
+
+    def fake_run_agent_runtime(**kwargs):
+        prompt = kwargs["prompt"]
+        agent_id = prompt.split("participant `", 1)[1].split("`", 1)[0]
+        step = prompt.split("Your collaboration step:\n", 1)[1].split("\n\n", 1)[0]
+        calls.append({"agent_id": agent_id, "step": step, "prompt": prompt})
+        return CodexExecResult(command=["fake"], output=f"{agent_id} {step} output")
+
+    monkeypatch.setattr(services, "run_agent_runtime", fake_run_agent_runtime)
+
+    result = runner.invoke(
+        app,
+        [
+            "play",
+            "--workspace",
+            str(workspace),
+            "--task",
+            "Discuss whether room should be discussion-first.",
+            "--profile",
+            "quick-deliberation",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "played 6 agent turns" in result.stdout
+    room_id = next(part for part in result.stdout.split() if part.startswith("room_"))
+    transcript_path = workspace / ".room" / "rooms" / room_id / "transcript.jsonl"
+    turns = [json.loads(line) for line in transcript_path.read_text().splitlines()]
+    assert [turn["type"] for turn in turns] == [
+        "AGENT_OPENING",
+        "AGENT_OPENING",
+        "AGENT_RESPONSE",
+        "AGENT_RESPONSE",
+        "AGENT_SYNTHESIS",
+        "AGENT_SYNTHESIS",
+    ]
+
+    response_prompts = [call["prompt"] for call in calls if call["step"] == "response"]
+    assert response_prompts
+    assert all("deepseek_advisor opening output" in prompt for prompt in response_prompts)
+    assert all("qwen_advisor opening output" in prompt for prompt in response_prompts)
+    assert all("cite at least one specific point" in prompt for prompt in response_prompts)
+
+    synthesis_prompts = [call["prompt"] for call in calls if call["step"] == "synthesis"]
+    assert synthesis_prompts
+    assert all("deepseek_advisor response output" in prompt for prompt in synthesis_prompts)
+    assert all("qwen_advisor response output" in prompt for prompt in synthesis_prompts)
+    assert all("Consensus:" in prompt for prompt in synthesis_prompts)
+
+
 def test_profile_loader_falls_back_to_bundled_profiles(tmp_path) -> None:
     profile = load_room_profile(tmp_path / "external-workspace", "advisory-mixed")
 
@@ -887,6 +1601,10 @@ def test_bundled_stage_profiles_are_available(tmp_path) -> None:
 
     debug_profile = load_room_profile(workspace, "debug-recovery")
     final_profile = load_room_profile(workspace, "final-review")
+    qwen_profile = load_room_profile(workspace, "qwen-advisory")
+    quick_profile = load_room_profile(workspace, "quick-advisors")
+    deliberation_profile = load_room_profile(workspace, "quick-deliberation")
+    trio_profile = load_room_profile(workspace, "advisory-trio")
 
     assert debug_profile.participants[0].id == "codex_debugger"
     assert debug_profile.participants[0].can_block is True
@@ -894,6 +1612,28 @@ def test_bundled_stage_profiles_are_available(tmp_path) -> None:
     assert final_profile.participants[0].id == "claude_final_reviewer"
     assert final_profile.participants[0].runtime == "claude-cli"
     assert final_profile.participants[1].id == "deepseek_release_advisor"
+    assert qwen_profile.participants[1].id == "qwen_advisor"
+    assert qwen_profile.participants[1].runtime == "openai-api"
+    assert qwen_profile.participants[1].model is None
+    assert qwen_profile.participants[1].api_base_url is None
+    assert [participant.id for participant in quick_profile.participants] == [
+        "deepseek_advisor",
+        "qwen_advisor",
+    ]
+    assert all(not participant.can_block for participant in quick_profile.participants)
+    assert deliberation_profile.pattern == "deliberation"
+    assert [participant.id for participant in deliberation_profile.participants] == [
+        "deepseek_advisor",
+        "qwen_advisor",
+    ]
+    assert [participant.id for participant in trio_profile.participants] == [
+        "codex_planner",
+        "deepseek_advisor",
+        "qwen_advisor",
+    ]
+    assert trio_profile.participants[1].model == "deepseek-v4-flash"
+    assert trio_profile.participants[0].weight > trio_profile.participants[1].weight
+    assert trio_profile.participants[1].weight > trio_profile.participants[2].weight
 
 
 def test_wake_captures_cycle_artifacts_with_fake_codex(tmp_path) -> None:

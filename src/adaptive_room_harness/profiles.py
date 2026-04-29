@@ -71,7 +71,7 @@ def render_profile_context(profile: RoomProfile) -> str:
         "",
         "Participants:",
     ]
-    for participant in profile.participants[:2]:
+    for participant in profile.participants:
         caps = ", ".join(
             f"{name}={score}" for name, score in sorted(participant.capabilities.items())
         )

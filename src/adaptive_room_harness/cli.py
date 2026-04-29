@@ -43,6 +43,9 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console(width=160)
+COLLABORATION_PATTERN_HELP = (
+    "Agent collaboration pattern: draft_review_revise, parallel_opinion, or deliberation."
+)
 
 
 def load_workspace_env(workspace: Path) -> None:
@@ -180,13 +183,13 @@ def ask(
     rounds: Annotated[int, typer.Option(help="Number of two-agent rounds when waking.")] = 1,
     collaboration_pattern: Annotated[
         str,
-        typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
+        typer.Option(help=COLLABORATION_PATTERN_HELP),
     ] = "draft_review_revise",
     agent_a: Annotated[str, typer.Option(help="First participant id.")] = "codex_agent_a",
     agent_b: Annotated[str, typer.Option(help="Second participant id.")] = "codex_agent_b",
     runtime: Annotated[
         str,
-        typer.Option(help="Agent runtime: codex-cli, claude-cli, or anthropic-api."),
+        typer.Option(help="Agent runtime: codex-cli, claude-cli, anthropic-api, or openai-api."),
     ] = "codex-cli",
     codex_bin: Annotated[str, typer.Option(help="Codex CLI executable.")] = "codex",
     claude_bin: Annotated[str, typer.Option(help="Claude Code CLI executable.")] = "claude",
@@ -405,13 +408,13 @@ def host_ask(
     rounds: Annotated[int, typer.Option(help="Number of two-agent rounds when waking.")] = 1,
     collaboration_pattern: Annotated[
         str,
-        typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
+        typer.Option(help=COLLABORATION_PATTERN_HELP),
     ] = "draft_review_revise",
     agent_a: Annotated[str, typer.Option(help="First participant id.")] = "codex_agent_a",
     agent_b: Annotated[str, typer.Option(help="Second participant id.")] = "codex_agent_b",
     runtime: Annotated[
         str,
-        typer.Option(help="Agent runtime: codex-cli, claude-cli, or anthropic-api."),
+        typer.Option(help="Agent runtime: codex-cli, claude-cli, anthropic-api, or openai-api."),
     ] = "codex-cli",
     codex_bin: Annotated[str, typer.Option(help="Codex CLI executable.")] = "codex",
     claude_bin: Annotated[str, typer.Option(help="Claude Code CLI executable.")] = "claude",
@@ -483,13 +486,13 @@ def codex_ask(
     rounds: Annotated[int, typer.Option(help="Number of two-agent rounds when waking.")] = 1,
     collaboration_pattern: Annotated[
         str,
-        typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
+        typer.Option(help=COLLABORATION_PATTERN_HELP),
     ] = "draft_review_revise",
     agent_a: Annotated[str, typer.Option(help="First participant id.")] = "codex_agent_a",
     agent_b: Annotated[str, typer.Option(help="Second participant id.")] = "codex_agent_b",
     runtime: Annotated[
         str,
-        typer.Option(help="Agent runtime: codex-cli, claude-cli, or anthropic-api."),
+        typer.Option(help="Agent runtime: codex-cli, claude-cli, anthropic-api, or openai-api."),
     ] = "codex-cli",
     codex_bin: Annotated[str, typer.Option(help="Codex CLI executable.")] = "codex",
     claude_bin: Annotated[str, typer.Option(help="Claude Code CLI executable.")] = "claude",
@@ -834,13 +837,15 @@ def play(
     rounds: Annotated[int, typer.Option(help="Number of two-agent rounds to run.")] = 1,
     collaboration_pattern: Annotated[
         str,
-        typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
+        typer.Option(help=COLLABORATION_PATTERN_HELP),
     ] = "draft_review_revise",
     agent_a: Annotated[str | None, typer.Option(help="First participant id.")] = None,
     agent_b: Annotated[str | None, typer.Option(help="Second participant id.")] = None,
     runtime: Annotated[
         str,
-        typer.Option(help="Default agent runtime: codex-cli, claude-cli, or anthropic-api."),
+        typer.Option(
+            help="Default agent runtime: codex-cli, claude-cli, anthropic-api, or openai-api."
+        ),
     ] = "codex-cli",
     agent_a_runtime: Annotated[
         str | None,
@@ -898,24 +903,27 @@ def play(
 
     load_workspace_env(workspace)
     profile_context = None
+    profile_participants = None
     if profile:
         try:
             room_profile = load_room_profile(workspace, profile)
         except (FileNotFoundError, ValueError) as exc:
             raise typer.BadParameter(str(exc)) from exc
-        first, second = room_profile.participants[:2]
         collaboration_pattern = room_profile.pattern
         rounds = room_profile.rounds
-        agent_a = agent_a or first.id
-        agent_b = agent_b or second.id
-        agent_a_runtime = agent_a_runtime or first.runtime
-        agent_b_runtime = agent_b_runtime or second.runtime
-        agent_a_model = agent_a_model or first.model
-        agent_b_model = agent_b_model or second.model
-        agent_a_bin = agent_a_bin or first.bin
-        agent_b_bin = agent_b_bin or second.bin
-        agent_a_api_base_url = agent_a_api_base_url or first.api_base_url
-        agent_b_api_base_url = agent_b_api_base_url or second.api_base_url
+        profile_participants = room_profile.participants
+        if len(profile_participants) == 2:
+            first, second = profile_participants
+            agent_a = agent_a or first.id
+            agent_b = agent_b or second.id
+            agent_a_runtime = agent_a_runtime or first.runtime
+            agent_b_runtime = agent_b_runtime or second.runtime
+            agent_a_model = agent_a_model or first.model
+            agent_b_model = agent_b_model or second.model
+            agent_a_bin = agent_a_bin or first.bin
+            agent_b_bin = agent_b_bin or second.bin
+            agent_a_api_base_url = agent_a_api_base_url or first.api_base_url
+            agent_b_api_base_url = agent_b_api_base_url or second.api_base_url
         profile_context = render_profile_context(room_profile)
     agent_a = agent_a or "codex_agent_a"
     agent_b = agent_b or "codex_agent_b"
@@ -950,6 +958,7 @@ def play(
             anthropic_base_url=anthropic_base_url,
             anthropic_api_key_env=anthropic_api_key_env,
             anthropic_max_tokens=anthropic_max_tokens,
+            participants=profile_participants,
         )
     except (RuntimeError, ValueError) as exc:
         raise typer.BadParameter(
@@ -980,14 +989,14 @@ def wake(
     rounds: Annotated[int, typer.Option(help="Number of two-agent rounds to run.")] = 1,
     collaboration_pattern: Annotated[
         str,
-        typer.Option(help="Agent collaboration pattern: draft_review_revise or parallel_opinion."),
+        typer.Option(help=COLLABORATION_PATTERN_HELP),
     ] = "draft_review_revise",
     agent_a: Annotated[str, typer.Option(help="First participant id.")] = "codex_agent_a",
     agent_b: Annotated[str, typer.Option(help="Second participant id.")] = "codex_agent_b",
     runtime: Annotated[
         str,
         typer.Option(
-            help="Agent runtime: codex-cli, claude-cli, or anthropic-api."
+            help="Agent runtime: codex-cli, claude-cli, anthropic-api, or openai-api."
         ),
     ] = "codex-cli",
     codex_bin: Annotated[str, typer.Option(help="Codex CLI executable.")] = "codex",

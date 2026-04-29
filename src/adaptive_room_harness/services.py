@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from adaptive_room_harness.agents import AgentRuntime, render_agent_prompt, run_agent_runtime
@@ -25,6 +27,7 @@ from adaptive_room_harness.models import (
     WakeExecutionPlan,
     utc_now,
 )
+from adaptive_room_harness.profiles import ParticipantProfile
 from adaptive_room_harness.store import (
     append_decision,
     append_evidence,
@@ -57,7 +60,12 @@ UNCERTAINTY_KEYWORDS = [
     "why",
 ]
 
-COLLABORATION_PATTERNS: set[str] = {"parallel_opinion", "draft_review_revise"}
+COLLABORATION_PATTERNS: set[str] = {
+    "parallel_opinion",
+    "draft_review_revise",
+    "deliberation",
+}
+ADVISOR_TIMEOUT_SECONDS_ENV = "ROOM_ADVISOR_TIMEOUT_SECONDS"
 
 
 def validate_collaboration_pattern(pattern: str) -> None:
@@ -93,6 +101,9 @@ def collaboration_steps(
                 ),
             },
         ]
+    if pattern == "deliberation":
+        participants = [agent_a, agent_b]
+        return deliberation_phase_steps(participants, phase="opening")
 
     return [
         {
@@ -131,6 +142,84 @@ def collaboration_steps(
                 "the main agent, and list remaining risks or follow-up checks."
             ),
         },
+    ]
+
+
+def participant_collaboration_steps(
+    pattern: CollaborationPattern,
+    *,
+    participant_ids: list[str],
+) -> list[dict[str, str]]:
+    if len(participant_ids) < 2:
+        raise ValueError("at least two participants are required")
+    if pattern == "deliberation":
+        return deliberation_phase_steps(participant_ids, phase="opening")
+    if len(participant_ids) == 2:
+        return collaboration_steps(
+            pattern,
+            agent_a=participant_ids[0],
+            agent_b=participant_ids[1],
+        )
+    if pattern != "parallel_opinion":
+        raise ValueError(
+            "profiles with more than two participants require parallel_opinion or deliberation"
+        )
+
+    steps = []
+    peer_list = ", ".join(participant_ids)
+    for index, participant_id in enumerate(participant_ids):
+        if index == 0:
+            instruction = (
+                "Provide the primary codebase-grounded recommendation with concrete next "
+                "steps, risks, and acceptance criteria."
+            )
+        else:
+            instruction = (
+                "Provide an independent advisory critique. Do not simply agree; add new "
+                "risks, alternatives, constraints, or product concerns."
+            )
+        steps.append(
+            {
+                "speaker_id": participant_id,
+                "peer_id": peer_list,
+                "step": "opinion",
+                "instruction": instruction,
+            }
+        )
+    return steps
+
+
+def deliberation_phase_steps(
+    participant_ids: list[str],
+    *,
+    phase: str,
+) -> list[dict[str, str]]:
+    peer_list = ", ".join(participant_ids)
+    instructions = {
+        "opening": (
+            "State your initial position. Include the strongest argument for your view, "
+            "one concrete risk, and one point you want peers to challenge."
+        ),
+        "response": (
+            "Respond to the prior transcript. You must cite at least one specific point "
+            "from another participant, say whether you agree or disagree, and explain "
+            "how that changes or reinforces your position."
+        ),
+        "synthesis": (
+            "Synthesize the discussion for the main agent. Separate consensus, remaining "
+            "disagreements, recommended next action, and weak suggestions to ignore."
+        ),
+    }
+    if phase not in instructions:
+        raise ValueError(f"unknown deliberation phase: {phase}")
+    return [
+        {
+            "speaker_id": participant_id,
+            "peer_id": peer_list,
+            "step": phase,
+            "instruction": instructions[phase],
+        }
+        for participant_id in participant_ids
     ]
 
 
@@ -242,13 +331,38 @@ def play_codex_agents(
     anthropic_base_url: str | None = None,
     anthropic_api_key_env: str | None = None,
     anthropic_max_tokens: int | None = None,
+    participants: list[ParticipantProfile] | None = None,
 ) -> list[TranscriptTurn]:
     if rounds < 1:
         raise ValueError("rounds must be at least 1")
     validate_collaboration_pattern(collaboration_pattern)
 
-    ensure_agent_participant(state, agent_a, "Codex Agent A")
-    ensure_agent_participant(state, agent_b, "Codex Agent B")
+    participant_configs = participants or [
+        ParticipantProfile(
+            id=agent_a,
+            runtime=agent_a_runtime or runtime,
+            model=agent_a_model or model,
+            role="agent A",
+            can_block=True,
+            bin=agent_a_bin,
+            api_base_url=agent_a_api_base_url,
+        ),
+        ParticipantProfile(
+            id=agent_b,
+            runtime=agent_b_runtime or runtime,
+            model=agent_b_model or model,
+            role="agent B",
+            can_block=True,
+            bin=agent_b_bin,
+            api_base_url=agent_b_api_base_url,
+        ),
+    ]
+    if len(participant_configs) < 2:
+        raise ValueError("at least two participants are required")
+
+    participant_by_id = {participant.id: participant for participant in participant_configs}
+    for participant in participant_configs:
+        ensure_agent_participant(state, participant.id, participant.role)
     state.mode = "open_council"
     state.status = "DISCUSSION"
     state.collaboration_pattern = collaboration_pattern
@@ -257,56 +371,291 @@ def play_codex_agents(
     turns: list[TranscriptTurn] = []
     task_text = render_wake_task(state, wake_goal=wake_goal, durable_context=durable_context)
     for round_number in range(1, rounds + 1):
-        for step in collaboration_steps(collaboration_pattern, agent_a=agent_a, agent_b=agent_b):
-            speaker_id = step["speaker_id"]
-            is_agent_a = speaker_id == agent_a
-            speaker_runtime = (
-                agent_a_runtime if is_agent_a else agent_b_runtime
-            ) or runtime
-            speaker_model = (agent_a_model if is_agent_a else agent_b_model) or model
-            speaker_bin = agent_a_bin if is_agent_a else agent_b_bin
-            speaker_api_base_url = (
-                agent_a_api_base_url if is_agent_a else agent_b_api_base_url
-            ) or anthropic_base_url
-            speaker_codex_bin = (
-                speaker_bin if speaker_runtime == "codex-cli" and speaker_bin else codex_bin
+        if collaboration_pattern == "deliberation":
+            turns.extend(
+                run_deliberation_round(
+                    state,
+                    participant_configs=participant_configs,
+                    participant_by_id=participant_by_id,
+                    task_text=task_text,
+                    round_number=round_number,
+                    runtime=runtime,
+                    codex_bin=codex_bin,
+                    claude_bin=claude_bin,
+                    model=model,
+                    timeout_seconds=timeout_seconds,
+                    anthropic_base_url=anthropic_base_url,
+                    anthropic_api_key_env=anthropic_api_key_env,
+                    anthropic_max_tokens=anthropic_max_tokens,
+                )
             )
-            speaker_claude_bin = (
-                speaker_bin if speaker_runtime == "claude-cli" and speaker_bin else claude_bin
-            )
-            prompt = render_agent_prompt(
-                room_id=state.room_id,
-                task=task_text,
-                agent_id=speaker_id,
-                peer_id=step["peer_id"],
+            continue
+
+        round_steps = participant_collaboration_steps(
+            collaboration_pattern,
+            participant_ids=[participant.id for participant in participant_configs],
+        )
+        frozen_transcript_excerpt = (
+            render_transcript_excerpt(state)
+            if collaboration_pattern == "parallel_opinion"
+            else None
+        )
+        pending_turns: list[tuple[str, str, str]] = []
+        if frozen_transcript_excerpt is not None:
+            pending_turns = run_parallel_opinion_steps(
+                state,
+                steps=round_steps,
+                participant_by_id=participant_by_id,
+                task_text=task_text,
                 round_number=round_number,
-                collaboration_pattern=collaboration_pattern,
-                collaboration_step=step["step"],
-                step_instruction=step["instruction"],
-                transcript_excerpt=render_transcript_excerpt(state),
-            )
-            result = run_agent_runtime(
-                runtime=speaker_runtime,
-                codex_bin=speaker_codex_bin,
-                claude_bin=speaker_claude_bin,
-                workspace=Path(state.workspace),
-                prompt=prompt,
-                model=speaker_model,
+                transcript_excerpt=frozen_transcript_excerpt,
+                runtime=runtime,
+                codex_bin=codex_bin,
+                claude_bin=claude_bin,
+                model=model,
                 timeout_seconds=timeout_seconds,
-                anthropic_base_url=speaker_api_base_url,
+                anthropic_base_url=anthropic_base_url,
                 anthropic_api_key_env=anthropic_api_key_env,
                 anthropic_max_tokens=anthropic_max_tokens,
             )
-            turn = record_turn(
-                state,
-                speaker_id=speaker_id,
-                content=result.output,
-                turn_type=f"AGENT_{step['step'].upper()}",
+        else:
+            for step in round_steps:
+                speaker_id = step["speaker_id"]
+                participant_config = participant_by_id[speaker_id]
+                result = run_participant_step(
+                    state,
+                    step=step,
+                    participant_config=participant_config,
+                    task_text=task_text,
+                    round_number=round_number,
+                    transcript_excerpt=render_transcript_excerpt(state),
+                    runtime=runtime,
+                    codex_bin=codex_bin,
+                    claude_bin=claude_bin,
+                    model=model,
+                    timeout_seconds=timeout_seconds,
+                    anthropic_base_url=anthropic_base_url,
+                    anthropic_api_key_env=anthropic_api_key_env,
+                    anthropic_max_tokens=anthropic_max_tokens,
+                )
+                turn = record_turn(
+                    state,
+                    speaker_id=speaker_id,
+                    content=result,
+                    turn_type=f"AGENT_{step['step'].upper()}",
+                )
+                turns.append(turn)
+        for speaker_id, output, turn_type in pending_turns:
+            turns.append(
+                record_turn(
+                    state,
+                    speaker_id=speaker_id,
+                    content=output,
+                    turn_type=turn_type,
+                )
             )
-            turns.append(turn)
 
     generate_report(state)
     return turns
+
+
+def run_deliberation_round(
+    state: RoomState,
+    *,
+    participant_configs: list[ParticipantProfile],
+    participant_by_id: dict[str, ParticipantProfile],
+    task_text: str,
+    round_number: int,
+    runtime: AgentRuntime,
+    codex_bin: str,
+    claude_bin: str,
+    model: str | None,
+    timeout_seconds: int,
+    anthropic_base_url: str | None,
+    anthropic_api_key_env: str | None,
+    anthropic_max_tokens: int | None,
+) -> list[TranscriptTurn]:
+    turns: list[TranscriptTurn] = []
+    participant_ids = [participant.id for participant in participant_configs]
+    for phase in ["opening", "response", "synthesis"]:
+        steps = deliberation_phase_steps(participant_ids, phase=phase)
+        pending_turns = run_parallel_opinion_steps(
+            state,
+            steps=steps,
+            participant_by_id=participant_by_id,
+            task_text=task_text,
+            round_number=round_number,
+            transcript_excerpt=render_transcript_excerpt(state),
+            runtime=runtime,
+            codex_bin=codex_bin,
+            claude_bin=claude_bin,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            anthropic_base_url=anthropic_base_url,
+            anthropic_api_key_env=anthropic_api_key_env,
+            anthropic_max_tokens=anthropic_max_tokens,
+        )
+        for speaker_id, output, turn_type in pending_turns:
+            turns.append(
+                record_turn(
+                    state,
+                    speaker_id=speaker_id,
+                    content=output,
+                    turn_type=turn_type,
+                )
+            )
+    return turns
+
+
+def run_parallel_opinion_steps(
+    state: RoomState,
+    *,
+    steps: list[dict[str, str]],
+    participant_by_id: dict[str, ParticipantProfile],
+    task_text: str,
+    round_number: int,
+    transcript_excerpt: str,
+    runtime: AgentRuntime,
+    codex_bin: str,
+    claude_bin: str,
+    model: str | None,
+    timeout_seconds: int,
+    anthropic_base_url: str | None,
+    anthropic_api_key_env: str | None,
+    anthropic_max_tokens: int | None,
+) -> list[tuple[str, str, str]]:
+    def run_step(step: dict[str, str]) -> tuple[str, str, str]:
+        speaker_id = step["speaker_id"]
+        output = run_participant_step(
+            state,
+            step=step,
+            participant_config=participant_by_id[speaker_id],
+            task_text=task_text,
+            round_number=round_number,
+            transcript_excerpt=transcript_excerpt,
+            runtime=runtime,
+            codex_bin=codex_bin,
+            claude_bin=claude_bin,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            anthropic_base_url=anthropic_base_url,
+            anthropic_api_key_env=anthropic_api_key_env,
+            anthropic_max_tokens=anthropic_max_tokens,
+        )
+        return speaker_id, output, f"AGENT_{step['step'].upper()}"
+
+    with ThreadPoolExecutor(max_workers=len(steps)) as executor:
+        return list(executor.map(run_step, steps))
+
+
+def run_participant_step(
+    state: RoomState,
+    *,
+    step: dict[str, str],
+    participant_config: ParticipantProfile,
+    task_text: str,
+    round_number: int,
+    transcript_excerpt: str,
+    runtime: AgentRuntime,
+    codex_bin: str,
+    claude_bin: str,
+    model: str | None,
+    timeout_seconds: int,
+    anthropic_base_url: str | None,
+    anthropic_api_key_env: str | None,
+    anthropic_max_tokens: int | None,
+) -> str:
+    speaker_id = step["speaker_id"]
+    speaker_runtime = participant_config.runtime or runtime
+    speaker_model = participant_config.model or model
+    speaker_bin = participant_config.bin
+    speaker_api_base_url = participant_config.api_base_url or anthropic_base_url
+    speaker_codex_bin = (
+        speaker_bin if speaker_runtime == "codex-cli" and speaker_bin else codex_bin
+    )
+    speaker_claude_bin = (
+        speaker_bin if speaker_runtime == "claude-cli" and speaker_bin else claude_bin
+    )
+    speaker_timeout_seconds = resolve_participant_timeout_seconds(
+        participant_config,
+        timeout_seconds=timeout_seconds,
+    )
+    prompt = render_agent_prompt(
+        room_id=state.room_id,
+        task=task_text,
+        agent_id=speaker_id,
+        peer_id=step["peer_id"],
+        round_number=round_number,
+        collaboration_pattern=state.collaboration_pattern,
+        collaboration_step=step["step"],
+        step_instruction=step["instruction"],
+        transcript_excerpt=transcript_excerpt,
+    )
+    try:
+        result = run_agent_runtime(
+            runtime=speaker_runtime,
+            codex_bin=speaker_codex_bin,
+            claude_bin=speaker_claude_bin,
+            workspace=Path(state.workspace),
+            prompt=prompt,
+            model=speaker_model,
+            timeout_seconds=speaker_timeout_seconds,
+            anthropic_base_url=speaker_api_base_url,
+            anthropic_api_key_env=anthropic_api_key_env,
+            anthropic_max_tokens=anthropic_max_tokens,
+        )
+    except Exception as exc:
+        if participant_config.can_block:
+            raise
+        return render_non_blocking_participant_failure(
+            participant_id=speaker_id,
+            runtime=speaker_runtime,
+            failure=str(exc),
+        )
+    return result.output
+
+
+def resolve_participant_timeout_seconds(
+    participant_config: ParticipantProfile,
+    *,
+    timeout_seconds: int,
+) -> int:
+    if participant_config.can_block:
+        return timeout_seconds
+    advisor_timeout_value = os.environ.get(ADVISOR_TIMEOUT_SECONDS_ENV)
+    if not advisor_timeout_value:
+        return timeout_seconds
+    advisor_timeout = int(advisor_timeout_value)
+    return max(1, min(timeout_seconds, advisor_timeout))
+
+
+def render_non_blocking_participant_failure(
+    *,
+    participant_id: str,
+    runtime: str,
+    failure: str,
+) -> str:
+    return (
+        f"Non-blocking advisor `{participant_id}` did not complete.\n\n"
+        f"Runtime: `{runtime}`\n"
+        f"Failure: {redact_known_secret_values(failure)}\n\n"
+        "Recommendation: continue with completed primary guidance; do not block on this "
+        "advisory participant.\n"
+        "Next: continue."
+    )
+
+
+def redact_known_secret_values(text: str) -> str:
+    redacted = text
+    secret_name_markers = ("KEY", "TOKEN", "SECRET")
+    for name, value in os.environ.items():
+        if (
+            value
+            and len(value) >= 8
+            and any(marker in name.upper() for marker in secret_name_markers)
+        ):
+            redacted = redacted.replace(value, "[redacted]")
+    return redacted
 
 
 def wake_room(
@@ -1374,6 +1723,10 @@ def extract_review_findings(text: str) -> list[str]:
                 "no blocking findings",
                 "no blocker",
                 "no blockers",
+                "non-blocking",
+                "nonblocking",
+                "not blocking",
+                "unless",
             ]
         ):
             continue
@@ -1406,6 +1759,10 @@ def is_blocking_finding(item: str) -> bool:
             "no blocking findings",
             "no blocker",
             "no blockers",
+            "non-blocking",
+            "nonblocking",
+            "not blocking",
+            "unless",
         ]
     ):
         return False

@@ -58,13 +58,15 @@ agent A revises
 agent B final-checks
 ```
 
-`parallel_opinion` remains available for cases where two independent recommendations are more useful than iterative collaboration.
+`parallel_opinion` remains available for cases where independent recommendations are more useful than iterative collaboration. Profile-driven rooms can run two or more participants concurrently, and low-authority participants marked `can_block = false` should not hold the main workflow hostage when their provider is slow or unavailable. Auto/default wakes can set `ROOM_ADVISOR_TIMEOUT_SECONDS` as a shorter timeout cap; explicit user-requested rooms should leave it unset so advisors can complete naturally.
 
 Rules:
 
 - Same-capability agents should not imply hierarchy.
 - Collaboration depth should come from the action chain.
 - Hierarchy is reserved for capability, cost, permission, or tool-access differences.
+- When the current main Codex session already owns codebase grounding, use `quick-advisors` to avoid launching an extra Codex CLI participant just to get cheap second opinions.
+- When the user asks for a room or discussion, prefer `quick-deliberation` over raw `parallel_opinion`; the room's unique value is agents responding to each other and producing consensus/disagreement, not merely fan-out opinions.
 
 ## Phase 1: Optional Proposal Bundle And Approval State
 
@@ -234,7 +236,7 @@ permissions
 
 Acceptance criteria:
 
-- The default remains two configured participants; project profiles choose their runtimes.
+- Project profiles can define two or more configured participants; each participant chooses its runtime.
 - A project can override participant ids, models, rounds, and wake conditions without code edits.
 - The triage result explains why each configured participant was or was not activated.
 

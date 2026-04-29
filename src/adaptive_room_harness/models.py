@@ -31,7 +31,12 @@ HostNextStep = Literal["continue_solo", "ask_user", "execute", "wake_again", "re
 ApprovalStatus = Literal["not_required", "pending", "accepted", "rejected", "superseded"]
 ReferenceConfidence = Literal["low", "medium", "high"]
 ReferenceOutcome = Literal["pass", "warn", "block", "error", "partial"]
-CollaborationPattern = Literal["parallel_opinion", "draft_review_revise", "mixed_runtime_review"]
+CollaborationPattern = Literal[
+    "parallel_opinion",
+    "draft_review_revise",
+    "deliberation",
+    "mixed_runtime_review",
+]
 
 
 class RoomState(BaseModel):

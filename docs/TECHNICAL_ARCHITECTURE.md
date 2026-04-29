@@ -247,18 +247,30 @@ participant_a  revise       revise using the review
 participant_b  final_check  check whether the revised result is ready
 ```
 
-This makes the transcript show real interaction between equally capable participants. Use `parallel_opinion` when the desired behavior is two independent recommendations instead:
+This makes the transcript show real interaction between equally capable participants. Use `parallel_opinion` when the desired behavior is concurrent independent recommendations instead:
 
 ```text
 participant_a  opinion
 participant_b  opinion
+participant_c  opinion
+```
+
+Use `deliberation` when the room must be a discussion rather than a fan-out:
+
+```text
+participant_a  opening
+participant_b  opening
+participant_a  response    reads both openings and cites a peer point
+participant_b  response    reads both openings and cites a peer point
+participant_a  synthesis   separates consensus, disagreement, next action, weak suggestions
+participant_b  synthesis   separates consensus, disagreement, next action, weak suggestions
 ```
 
 ## Runtime Neutrality
 
-The room orchestrates participants, not a single vendor or CLI. A participant can be backed by any supported runtime adapter, currently including `codex-cli`, `claude-cli`, and `anthropic-api`.
+The room orchestrates participants, not a single vendor or CLI. A participant can be backed by any supported runtime adapter, currently including `codex-cli`, `claude-cli`, `anthropic-api`, and `openai-api`.
 
-Requested runtime is authoritative for a wake cycle. Once a profile or command resolves a participant to a runtime, that participant either runs through that runtime or fails with a visible runtime/configuration error. The harness must not silently reroute a failed `claude-cli` or `anthropic-api` participant to `codex-cli`.
+Requested runtime is authoritative for a wake cycle. Once a profile or command resolves a participant to a runtime, that participant either runs through that runtime or fails with a visible runtime/configuration error. The harness must not silently reroute a failed `claude-cli`, `anthropic-api`, or `openai-api` participant to `codex-cli`.
 
 Fallbacks may become useful later, but they must be explicit profile policy and recorded in room artifacts. Hidden fallback would make transcripts misleading because the recorded participant would not match the agent that actually spoke.
 
@@ -491,7 +503,7 @@ Phase 1:
 - filesystem room contract
 - JSONL transcript/evidence/decision logs
 - final report generation
-- Codex CLI two-agent wake cycle
+- Codex CLI two-participant wake cycle, later expanded to profile-driven N-participant rooms
 - durable summary/design/tasks artifacts
 - expcap context import/export placeholders
 - SDD artifact folders

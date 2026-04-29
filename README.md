@@ -4,7 +4,7 @@ Adaptive Room Harness is a local-first multi-agent discussion room for coding-ag
 
 It lets a main agent keep ownership of the task while waking a small peer room when work is complex, risky, or ambiguous. The room records the agent discussion, writes durable artifacts, and produces a concise `main_agent_reference.json` packet that the main agent can use as advisory input.
 
-The room is runtime-neutral: each participant is backed by the configured adapter, such as `codex-cli`, `claude-cli`, or an Anthropic-compatible API. A requested runtime is authoritative for that wake cycle. If it fails, the room surfaces that failure instead of silently substituting another runtime.
+The room is runtime-neutral: each participant is backed by the configured adapter, such as `codex-cli`, `claude-cli`, an Anthropic-compatible API, or an OpenAI-compatible API. A requested runtime is authoritative for that wake cycle. If it fails, the room surfaces that failure instead of silently substituting another runtime.
 
 This is an early public alpha: useful enough to run locally, intentionally small, and still rough around the edges.
 
@@ -18,7 +18,7 @@ Most coding-agent work should stay simple: one main agent, one workspace, one cl
 
 Adaptive Room Harness is the small local harness for that middle ground. It does not try to become a general autonomous multi-agent platform. It gives the main agent a room it can wake when useful, then turns the discussion into artifacts the main agent can actually use.
 
-The current alpha ships with Codex CLI, Claude Code CLI, and Anthropic-compatible API adapters. Codex-specific commands are convenience wrappers; they are not the room's identity or the only supported runtime.
+The current alpha ships with Codex CLI, Claude Code CLI, Anthropic-compatible API, and OpenAI-compatible API adapters. Codex-specific commands are convenience wrappers; they are not the room's identity or the only supported runtime.
 
 ## What Works Today
 
@@ -35,7 +35,7 @@ The main agent remains the writer, decider, and verifier. Other agents provide d
 ## Prerequisites
 
 - Python 3.11+
-- At least one working runtime adapter for live participant calls, such as Codex CLI, Claude Code CLI, or an Anthropic-compatible API key
+- At least one working runtime adapter for live participant calls, such as Codex CLI, Claude Code CLI, an Anthropic-compatible API key, or an OpenAI-compatible API key
 - Runtime authentication already configured locally for the adapters you choose
 
 The test suite uses a fake Codex executable, so development checks do not require live Codex calls.
@@ -108,7 +108,8 @@ main agent receives task
   -> room play --profile <name>
   -> simple task: continue solo
   -> complex task: wake configured participants
-  -> participant A drafts, participant B reviews, participant A revises, participant B final-checks
+  -> two-peer profiles can draft/review/revise/final-check
+  -> multi-participant profiles collect independent advisory opinions
   -> room writes main_agent_reference.json
   -> main agent reads the reference, decides, implements, verifies
 ```
@@ -127,7 +128,9 @@ room wake --workspace <path> --task "<task>" --goal "<goal>"
 room play --workspace <path> --task "<task>" --rounds 1
 ```
 
-The default collaboration pattern is `draft_review_revise`. Use `--collaboration-pattern parallel_opinion` when you intentionally want the older two-independent-opinions behavior.
+The default collaboration pattern is `draft_review_revise`. Use `--collaboration-pattern parallel_opinion` when you intentionally want independent participant opinions. Use `--collaboration-pattern deliberation` when the room should behave like a real discussion: participants first state positions, then respond to the transcript, then synthesize consensus and disagreement. Profile-driven rooms with `parallel_opinion` or each deliberation phase run participant calls concurrently and record low-authority advisor failures as non-blocking when `can_block = false`.
+
+Non-blocking advisors can use a shorter timeout cap so cheap or experimental providers do not drag automatic room wakes. Set `ROOM_ADVISOR_TIMEOUT_SECONDS` for auto/default flows; use about `120` seconds for `quick-deliberation`, because it has three discussion phases, and about `45` seconds for `quick-advisors` fan-out. When it is unset, explicit `room play` calls use the full `--timeout-seconds` value.
 
 Manual room operations are also available:
 
@@ -235,6 +238,33 @@ room play \
   --task "..."
 ```
 
+The alpha also supports OpenAI-compatible Chat Completions providers. Qwen / DashScope works well
+as a lightweight advisory participant when you only have an API key:
+
+```bash
+export DASHSCOPE_API_KEY=<your-qwen-or-dashscope-key>
+
+room play \
+  --workspace . \
+  --task "Codex plans; Qwen reviews product value and alternatives." \
+  --profile qwen-advisory
+```
+
+By default, the OpenAI-compatible runtime uses `ROOM_OPENAI_BASE_URL` or
+`https://dashscope.aliyuncs.com/compatible-mode/v1`, model `qwen-plus`, and key env
+`DASHSCOPE_API_KEY`. It also accepts `QWEN_API_KEY` when that is the key you have set. Use
+`ROOM_OPENAI_API_KEY_ENV` if you store the key under a different name. The Qwen participant is
+advisory-only in the bundled profile; it does not read or write files.
+
+For a custom OpenAI-compatible Qwen endpoint, put the provider-specific values in `.env`:
+
+```bash
+QWEN_API_KEY=<your-key>
+ROOM_OPENAI_API_KEY_ENV=QWEN_API_KEY
+ROOM_OPENAI_BASE_URL=https://your-provider.example/api/openai/v1
+ROOM_OPENAI_MODEL=your-qwen-model-name
+```
+
 `room play` can mix runtimes per participant:
 
 ```bash
@@ -271,6 +301,14 @@ declared runtime, or the wake cycle should fail clearly.
 The default profiles map to a simple advisory loop:
 
 - `advisory-mixed`: before work, for complex design or unclear tasks.
+- `qwen-advisory`: before work, when you want Codex grounded in the codebase and Qwen as a cheap
+  OpenAI-compatible advisor.
+- `quick-advisors`: before work or during review, when the current main Codex session already owns
+  codebase grounding and you only want low-latency DS + Qwen second opinions.
+- `quick-deliberation`: when the value should come from DS + Qwen responding to each other rather
+  than merely returning two independent opinions.
+- `advisory-trio`: before work, when you want Codex as primary planner, DeepSeek as secondary
+  cheap critic, and Qwen as a lower-weight OpenAI-compatible advisor.
 - `debug-recovery`: during work, when the main agent is stuck, tests fail repeatedly, or the bug is unclear.
 - `final-review`: after work, before commit, push, release, or broad use; Claude Code performs the
   final review and DeepSeek provides cheap outsider risk, documentation, and usability advice.

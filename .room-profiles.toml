@@ -48,6 +48,112 @@ weight = 0.35
 can_block = false
 capabilities = { coding = 0.45, architecture = 0.55, review = 0.6, product = 0.75 }
 
+[profiles.qwen-advisory]
+description = "Codex plans from codebase reality; Qwen provides OpenAI-compatible product, architecture, and dissenting advice."
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.qwen-advisory.participants]]
+id = "codex_planner"
+runtime = "codex-cli"
+model = "gpt-5.4"
+role = "codebase-grounded planner"
+authority = "primary"
+weight = 1.0
+can_block = true
+capabilities = { coding = 0.95, architecture = 0.9, review = 0.8, product = 0.6 }
+
+[[profiles.qwen-advisory.participants]]
+id = "qwen_advisor"
+runtime = "openai-api"
+role = "OpenAI-compatible Qwen advisor for product value, architecture alternatives, and dissent"
+authority = "advisory"
+weight = 0.45
+can_block = false
+capabilities = { coding = 0.6, architecture = 0.65, review = 0.65, product = 0.75 }
+
+[profiles.quick-advisors]
+description = "Low-latency advisory room for the current main Codex session: DeepSeek and Qwen only, no extra Codex CLI participant."
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.quick-advisors.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+model = "deepseek-v4-flash"
+role = "low-cost advisor for risks, dissent, and overlooked assumptions"
+authority = "advisory"
+weight = 0.55
+can_block = false
+capabilities = { coding = 0.45, architecture = 0.6, review = 0.65, product = 0.75 }
+
+[[profiles.quick-advisors.participants]]
+id = "qwen_advisor"
+runtime = "openai-api"
+role = "OpenAI-compatible Qwen advisor for alternatives, product tradeoffs, and second opinions"
+authority = "advisory"
+weight = 0.45
+can_block = false
+capabilities = { coding = 0.45, architecture = 0.55, review = 0.55, product = 0.7 }
+
+[profiles.quick-deliberation]
+description = "True lightweight discussion room: DeepSeek and Qwen state positions, respond to each other, then synthesize consensus and disagreement."
+pattern = "deliberation"
+rounds = 1
+
+[[profiles.quick-deliberation.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+model = "deepseek-v4-flash"
+role = "low-cost advisor for risks, dissent, and overlooked assumptions"
+authority = "advisory"
+weight = 0.55
+can_block = false
+capabilities = { coding = 0.45, architecture = 0.6, review = 0.65, product = 0.75 }
+
+[[profiles.quick-deliberation.participants]]
+id = "qwen_advisor"
+runtime = "openai-api"
+role = "OpenAI-compatible Qwen advisor for alternatives, product tradeoffs, and second opinions"
+authority = "advisory"
+weight = 0.45
+can_block = false
+capabilities = { coding = 0.45, architecture = 0.55, review = 0.55, product = 0.7 }
+
+[profiles.advisory-trio]
+description = "Codex leads from codebase reality; DeepSeek and Qwen provide lower-weight independent advisory critique."
+pattern = "parallel_opinion"
+rounds = 1
+
+[[profiles.advisory-trio.participants]]
+id = "codex_planner"
+runtime = "codex-cli"
+model = "gpt-5.4"
+role = "primary codebase-grounded planner and recommendation owner"
+authority = "primary"
+weight = 1.0
+can_block = true
+capabilities = { coding = 0.95, architecture = 0.9, review = 0.85, product = 0.65 }
+
+[[profiles.advisory-trio.participants]]
+id = "deepseek_advisor"
+runtime = "anthropic-api"
+model = "deepseek-v4-flash"
+role = "secondary low-cost advisor for risks, dissent, and overlooked assumptions"
+authority = "advisory"
+weight = 0.55
+can_block = false
+capabilities = { coding = 0.5, architecture = 0.6, review = 0.65, product = 0.75 }
+
+[[profiles.advisory-trio.participants]]
+id = "qwen_advisor"
+runtime = "openai-api"
+role = "tertiary Qwen advisor for alternative architecture and product tradeoffs"
+authority = "advisory"
+weight = 0.35
+can_block = false
+capabilities = { coding = 0.45, architecture = 0.55, review = 0.55, product = 0.65 }
+
 [profiles.debug-recovery]
 description = "Recover when the main agent is stuck, tests are failing, or the next debugging move is unclear."
 pattern = "parallel_opinion"

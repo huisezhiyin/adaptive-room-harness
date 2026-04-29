@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-AgentRuntime = Literal["codex-cli", "claude-cli", "anthropic-api"]
+AgentRuntime = Literal["codex-cli", "claude-cli", "anthropic-api", "openai-api"]
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,12 @@ ANTHROPIC_MODEL_ENV = "ROOM_ANTHROPIC_MODEL"
 ANTHROPIC_BASE_URL_ENV = "ROOM_ANTHROPIC_BASE_URL"
 ANTHROPIC_API_KEY_ENV_ENV = "ROOM_ANTHROPIC_API_KEY_ENV"
 ANTHROPIC_MAX_TOKENS_ENV = "ROOM_ANTHROPIC_MAX_TOKENS"
+DEFAULT_OPENAI_MODEL = "qwen-plus"
+DEFAULT_OPENAI_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+OPENAI_MODEL_ENV = "ROOM_OPENAI_MODEL"
+OPENAI_BASE_URL_ENV = "ROOM_OPENAI_BASE_URL"
+OPENAI_API_KEY_ENV_ENV = "ROOM_OPENAI_API_KEY_ENV"
+OPENAI_MAX_TOKENS_ENV = "ROOM_OPENAI_MAX_TOKENS"
 
 
 def resolve_codex_model(model: str | None = None) -> str:
@@ -135,6 +141,46 @@ def resolve_anthropic_max_tokens(max_tokens: int | None = None) -> int:
     return 2000
 
 
+def resolve_openai_model(model: str | None = None) -> str:
+    if model:
+        return model
+    env_model = os.environ.get(OPENAI_MODEL_ENV)
+    if env_model:
+        return env_model
+    return DEFAULT_OPENAI_MODEL
+
+
+def resolve_openai_base_url(base_url: str | None = None) -> str:
+    if base_url:
+        return base_url
+    env_base_url = os.environ.get(OPENAI_BASE_URL_ENV)
+    if env_base_url:
+        return env_base_url
+    return DEFAULT_OPENAI_BASE_URL
+
+
+def resolve_openai_api_key_env(api_key_env: str | None = None) -> str:
+    if api_key_env:
+        return api_key_env
+    env_name = os.environ.get(OPENAI_API_KEY_ENV_ENV)
+    if env_name:
+        return env_name
+    if os.environ.get("DASHSCOPE_API_KEY"):
+        return "DASHSCOPE_API_KEY"
+    if os.environ.get("QWEN_API_KEY"):
+        return "QWEN_API_KEY"
+    return "DASHSCOPE_API_KEY"
+
+
+def resolve_openai_max_tokens(max_tokens: int | None = None) -> int:
+    if max_tokens:
+        return max_tokens
+    env_value = os.environ.get(OPENAI_MAX_TOKENS_ENV)
+    if env_value:
+        return int(env_value)
+    return 2000
+
+
 def render_agent_prompt(
     *,
     room_id: str,
@@ -152,7 +198,7 @@ def render_agent_prompt(
 Task:
 {task}
 
-Peer participant:
+Peer participant(s):
 {peer_id}
 
 Round:
@@ -172,6 +218,10 @@ Recent room transcript:
 
 Output contract:
 - Start with the concrete result for your collaboration step.
+- In deliberation mode, engage the transcript directly; do not give an isolated opinion.
+- For response steps, cite at least one specific peer point and state agree/disagree/modify.
+- For synthesis steps, include `Consensus:`, `Disagreements:`,
+  `Recommended next action:`, and `Weak suggestions:`.
 - Include a `Recommendation:` line when you have a preferred path.
 - Include `Suggested steps:` and `Verification:` when implementation or review follow-up is useful.
 - Include `Risks:` for concrete failure modes, not generic caution.
@@ -297,6 +347,63 @@ def run_anthropic_messages(
     )
 
 
+def run_openai_chat_completions(
+    *,
+    prompt: str,
+    model: str | None = None,
+    base_url: str | None = None,
+    api_key_env: str | None = None,
+    max_tokens: int | None = None,
+    timeout_seconds: int = 600,
+) -> CodexExecResult:
+    env_name = resolve_openai_api_key_env(api_key_env)
+    api_key = os.environ.get(env_name)
+    if not api_key:
+        raise RuntimeError(f"{env_name} is not set")
+
+    try:
+        import openai
+    except ImportError as exc:
+        raise RuntimeError("openai package is not installed") from exc
+
+    effective_model = resolve_openai_model(model)
+    effective_base_url = resolve_openai_base_url(base_url)
+    client = openai.OpenAI(
+        api_key=api_key,
+        base_url=effective_base_url,
+        timeout=timeout_seconds,
+    )
+    completion = client.chat.completions.create(
+        model=effective_model,
+        max_tokens=resolve_openai_max_tokens(max_tokens),
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a careful coding-agent room participant.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+    )
+    output_parts: list[str] = []
+    for choice in completion.choices:
+        content = getattr(choice.message, "content", None)
+        if content:
+            output_parts.append(content)
+    output = "\n".join(output_parts).strip()
+    return CodexExecResult(
+        command=[
+            "openai-chat-completions",
+            "--base-url",
+            effective_base_url,
+            "--model",
+            effective_model,
+            "--api-key-env",
+            env_name,
+        ],
+        output=output,
+    )
+
+
 def run_claude_print(
     *,
     claude_bin: str,
@@ -390,6 +497,13 @@ def run_agent_runtime(
             base_url=anthropic_base_url,
             api_key_env=anthropic_api_key_env,
             max_tokens=anthropic_max_tokens,
+            timeout_seconds=timeout_seconds,
+        )
+    if runtime == "openai-api":
+        return run_openai_chat_completions(
+            prompt=prompt,
+            model=model,
+            base_url=anthropic_base_url,
             timeout_seconds=timeout_seconds,
         )
     raise RuntimeError(f"unsupported agent runtime: {runtime}")
